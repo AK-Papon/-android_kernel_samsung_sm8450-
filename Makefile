@@ -1516,27 +1516,30 @@ PHONY += __headers
 __headers: $(version_h) scripts_basic uapi-asm-generic archheaders archscripts
 	$(Q)$(MAKE) $(build)=scripts build_unifdef
 
-PHONY += headers_install_all
-headers_install_all:
-	$(Q)$(CONFIG_SHELL) $(srctree)/scripts/headers.sh install
+techpack-dirs := $(shell find $(srctree)/techpack -maxdepth 1 -mindepth 1 -type d -not -name ".*")
+techpack-dirs := $(subst $(srctree)/,,$(techpack-dirs))
 
-PHONY += headers_install
-headers_install: __headers
+PHONY += headers
+headers: $(version_h) scripts_unifdef uapi-asm-generic archheaders archscripts
 	$(if $(wildcard $(srctree)/arch/$(SRCARCH)/include/uapi/asm/Kbuild),, \
 	  $(error Headers not exportable for the $(SRCARCH) architecture))
-	$(Q)$(MAKE) $(hdr-inst)=include/uapi dst=include
-	$(Q)$(MAKE) $(hdr-inst)=arch/$(SRCARCH)/include/uapi $(hdr-dst)
-	$(Q)$(MAKE) $(hdr-inst)=techpack
+	$(Q)$(MAKE) $(hdr-inst)=include/uapi
+	$(Q)$(MAKE) $(hdr-inst)=arch/$(SRCARCH)/include/uapi
+	$(Q)for d in $(techpack-dirs); do \
+		$(MAKE) $(hdr-inst)=$$d/include/uapi; \
+	done
 
 PHONY += headers_check_all
 headers_check_all: headers_install_all
 	$(Q)$(CONFIG_SHELL) $(srctree)/scripts/headers.sh check
 
 PHONY += headers_check
-headers_check: headers_install
-	$(Q)$(MAKE) $(hdr-inst)=include/uapi dst=include HDRCHECK=1
-	$(Q)$(MAKE) $(hdr-inst)=arch/$(SRCARCH)/include/uapi $(hdr-dst) HDRCHECK=1
-	$(Q)$(MAKE) $(hdr-inst)=techpack HDRCHECK=1
+headers_check: headers
+	$(Q)$(MAKE) $(hdr-inst)=include/uapi HDRCHECK=1
+	$(Q)$(MAKE) $(hdr-inst)=arch/$(SRCARCH)/include/uapi HDRCHECK=1
+	$(Q)for d in $(techpack-dirs); do \
+		$(MAKE) $(hdr-inst)=$$d/include/uapi HDRCHECK=1; \
+	done
 
 ifdef CONFIG_HEADERS_INSTALL
 prepare: headers
