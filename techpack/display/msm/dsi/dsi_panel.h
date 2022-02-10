@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
+ * Copyright (c) 2022-2023, Qualcomm Innovation Center, Inc. All rights reserved.
  * Copyright (c) 2016-2021, The Linux Foundation. All rights reserved.
  */
 
@@ -23,13 +24,25 @@
 #include "msm_drv.h"
 
 #define MAX_BL_LEVEL 4096
+#define HBM_BL_LEVEL 4080
+
 #define MAX_BL_SCALE_LEVEL 1024
 #define MAX_SV_BL_SCALE_LEVEL 65535
 #define SV_BL_SCALE_CAP (MAX_SV_BL_SCALE_LEVEL * 4)
 #define DSI_CMD_PPS_SIZE 135
 
 #define DSI_CMD_PPS_HDR_SIZE 7
-#define DSI_MODE_MAX 32
+#define DSI_MODE_MAX 64
+
+#define DSI_IS_FSC_PANEL(fsc_rgb_order) \
+		(((!strcmp(fsc_rgb_order, "fsc_rgb")) || \
+		(!strcmp(fsc_rgb_order, "fsc_rbg")) || \
+		(!strcmp(fsc_rgb_order, "fsc_bgr")) || \
+		(!strcmp(fsc_rgb_order, "fsc_brg")) || \
+		(!strcmp(fsc_rgb_order, "fsc_gbr")) || \
+		(!strcmp(fsc_rgb_order, "fsc_grb"))))
+
+#define FSC_MODE_LABEL_SIZE	8
 
 /*
  * Defining custom dsi msg flag.
@@ -40,6 +53,33 @@
 #define MIPI_DSI_MSG_CMD_DMA_SCHED BIT(5)
 #define MIPI_DSI_MSG_BATCH_COMMAND BIT(6)
 #define MIPI_DSI_MSG_UNICAST_COMMAND BIT(7)
+
+#define COMMAND_LENGTH_1_BYTE_SEND	44
+#define COMMAND_LENGTH_2_BYTE_SEND	49
+#define COMMAND_LENGTH_GET_VALUE	44
+
+enum dsi_cmd_sfm_set_type {
+	DSI_CMD_SET_FRAME = 0,
+	DSI_CMD_DISABLE_SKIP_FRAME_MODE,
+	DSI_CMD_GET_REG2F,
+	DSI_CMD_GET_REG6D,
+	DSI_CMD_TE_NOTFOLLOW_SOURCE,
+	DSI_CMD_TE_FOLLOW_SOURCE,
+	DSI_CMD_30HZ_DIMMING,
+	DSI_CMD_10HZ_DIMMING,
+	DSI_CMD_1HZ_DIMMING,
+	DSI_CMD_60HZ_NODIMMING,
+	DSI_CMD_30HZ_NODIMMING,
+	DSI_CMD_24HZ_NODIMMING,
+	DSI_CMD_10HZ_NODIMMING,
+	DSI_CMD_1HZ_NODIMMING,
+	DSI_CMD_SFM_MAX
+};
+
+struct dsi_display_refresh_rate_cmd_set {
+	char *cmds;
+	u32 count;
+};
 
 enum dsi_panel_rotation {
 	DSI_PANEL_ROTATE_NONE = 0,
@@ -53,6 +93,7 @@ enum dsi_backlight_type {
 	DSI_BACKLIGHT_WLED,
 	DSI_BACKLIGHT_DCS,
 	DSI_BACKLIGHT_EXTERNAL,
+	DSI_BACKLIGHT_I2C,
 	DSI_BACKLIGHT_UNKNOWN,
 	DSI_BACKLIGHT_MAX,
 };
@@ -127,12 +168,15 @@ struct dsi_backlight_config {
 
 	u32 bl_min_level;
 	u32 bl_max_level;
+	u32 bl_hbm_level;
+
 	u32 brightness_max_level;
 	/* current brightness value */
 	u32 brightness;
 	u32 bl_level;
 	u32 bl_scale;
 	u32 bl_scale_sv;
+	u32 bl_dcs_subtype;
 	bool bl_inverted_dbv;
 	/* digital dimming backlight LUT */
 	struct drm_msm_dimming_bl_lut *dimming_bl_lut;
@@ -175,9 +219,6 @@ enum esd_check_status_mode {
 	ESD_MODE_PANEL_TE,
 	ESD_MODE_SW_SIM_SUCCESS,
 	ESD_MODE_SW_SIM_FAILURE,
-#if IS_ENABLED(CONFIG_DISPLAY_SAMSUNG)
-	ESD_MODE_PANEL_IRQ,
-#endif
 	ESD_MODE_MAX
 };
 
@@ -213,11 +254,19 @@ struct dsi_panel_ops {
 	int (*trigger_esd_attack)(struct dsi_panel *panel);
 };
 
+#define BRIGHTNESS_ALPHA_PAIR_LEN 2
+struct brightness_alpha_pair {
+	u16 brightness;
+	u8 alpha;
+};
+
 struct dsi_panel {
 	const char *name;
 	const char *type;
 	struct device_node *panel_of_node;
 	struct mipi_dsi_device mipi_device;
+	struct device_node *rgb_left_led_node;
+	struct device_node *rgb_right_led_node;
 
 	struct mutex panel_lock;
 	struct drm_panel drm_panel;
@@ -240,6 +289,8 @@ struct dsi_panel {
 	u32 num_timing_nodes;
 	u32 num_display_modes;
 
+	char fsc_rgb_order[FSC_MODE_LABEL_SIZE];
+
 	struct dsi_regulator_info power_info;
 	struct dsi_backlight_config bl_config;
 	struct dsi_panel_reset_config reset_config;
@@ -258,7 +309,6 @@ struct dsi_panel {
 
 	bool panel_initialized;
 	bool te_using_watchdog_timer;
-	bool switch_vsync_delay;
 	struct dsi_qsync_capabilities qsync_caps;
 	struct dsi_avr_capabilities avr_caps;
 
@@ -276,15 +326,11 @@ struct dsi_panel {
 	enum dsi_panel_physical_type panel_type;
 
 	struct dsi_panel_ops panel_ops;
-#if IS_ENABLED(CONFIG_DISPLAY_SAMSUNG)
-	void *panel_private;
-	struct device_node *self_display_of_node;
-	struct dsi_parser_utils self_display_utils;
-	struct device_node *mafpc_of_node;
-	struct dsi_parser_utils mafpc_utils;
-	struct device_node *test_mode_of_node;
-	struct dsi_parser_utils test_mode_utils;
-#endif
+
+	struct dsi_display_refresh_rate_cmd_set nt_cmd_sets[DSI_CMD_SFM_MAX];
+
+	struct brightness_alpha_pair *fod_dim_lut;
+	unsigned int fod_dim_lut_len;
 };
 
 static inline bool dsi_panel_ulps_feature_enabled(struct dsi_panel *panel)
@@ -422,16 +468,6 @@ void dsi_panel_destroy_cmd_packets(struct dsi_panel_cmd_set *set);
 
 void dsi_panel_dealloc_cmd_packets(struct dsi_panel_cmd_set *set);
 
-#if IS_ENABLED(CONFIG_DISPLAY_SAMSUNG)
-#define SS_CMD_PROP_STR_LEN (100)
-
-int dsi_panel_set_pinctrl_state(struct dsi_panel *panel, bool enable);
-int dsi_panel_power_on(struct dsi_panel *panel);
-int dsi_panel_power_off(struct dsi_panel *panel);
-int dsi_panel_tx_cmd_set(struct dsi_panel *panel, int type);
-int __ss_dsi_panel_parse_cmd_sets(struct dsi_panel_cmd_set *cmd,
-					int type, struct dsi_parser_utils *utils,
-					char (*ss_cmd_set_prop)[SS_CMD_PROP_STR_LEN]);
-#endif
+int nt_display_parse_switch_cmds(struct dsi_panel *panel);
 
 #endif /* _DSI_PANEL_H_ */
