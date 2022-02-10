@@ -1221,6 +1221,60 @@ static int dsi_panel_pwm_register(struct dsi_panel *panel)
 	return 0;
 }
 
+static int dsi_panel_parse_fsc_rgb_order(struct dsi_panel *panel,
+		struct dsi_parser_utils *utils)
+{
+	int rc = 0;
+	const char *fsc_rgb_order;
+
+	fsc_rgb_order = utils->get_property(utils->data,
+		"qcom,dsi-panel-fsc-rgb-order", NULL);
+	if (fsc_rgb_order) {
+		if (DSI_IS_FSC_PANEL(fsc_rgb_order)) {
+			strlcpy(panel->fsc_rgb_order, fsc_rgb_order,
+				sizeof(panel->fsc_rgb_order));
+		} else {
+			DSI_ERR("Unrecognized fsc color order-%s\n",
+				fsc_rgb_order);
+			rc = -EINVAL;
+		}
+	}
+
+	return rc;
+}
+
+static int dsi_panel_parse_rgb_led(struct dsi_panel *panel,
+		struct device_node *of_node)
+{
+	int rc = 0;
+
+	if (!panel || !of_node)
+		return -EINVAL;
+
+	if (panel->bl_config.type != DSI_BACKLIGHT_I2C)
+		return 0;
+
+	panel->rgb_left_led_node = of_parse_phandle(of_node,
+		"qcom,panel-rgb-left-led", 0);
+
+	panel->rgb_right_led_node = of_parse_phandle(of_node,
+		"qcom,panel-rgb-right-led", 0);
+
+	return rc;
+}
+
+bool dsi_panel_get_fod_ui(struct dsi_panel *panel)
+{
+	return panel->fod_ui;
+}
+
+void dsi_panel_set_fod_ui(struct dsi_panel *panel, bool status)
+{
+	panel->fod_ui = status;
+
+	sysfs_notify(&panel->parent->kobj, NULL, "fod_ui");
+}
+
 static int dsi_panel_bl_register(struct dsi_panel *panel)
 {
 	int rc = 0;
@@ -4285,8 +4339,24 @@ int nt_is_panel_detected(void)
 	return rc;
 }
 
+static ssize_t sysfs_fod_ui_read(struct device *dev,
+	struct device_attribute *attr, char *buf)
+{
+	struct dsi_display *display = dev_get_drvdata(dev);
+	struct dsi_panel *panel = display->panel;
+	bool status;
+
+	mutex_lock(&panel->panel_lock);
+	status = panel->fod_ui;
+	mutex_unlock(&panel->panel_lock);
+
+	return snprintf(buf, PAGE_SIZE, "%u\n", status);
+}
+
+static DEVICE_ATTR(fod_ui, 0444, sysfs_fod_ui_read, NULL);
 
 static struct attribute *panel_attrs[] = {
+	&dev_attr_fod_ui.attr,
 	NULL,
 };
 
