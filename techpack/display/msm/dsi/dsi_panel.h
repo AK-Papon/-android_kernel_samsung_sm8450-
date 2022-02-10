@@ -213,6 +213,12 @@ struct dsi_panel_ops {
 	int (*trigger_esd_attack)(struct dsi_panel *panel);
 };
 
+#define BRIGHTNESS_ALPHA_PAIR_LEN 2
+struct brightness_alpha_pair {
+	u16 brightness;
+	u8 alpha;
+};
+
 struct dsi_panel {
 	const char *name;
 	const char *type;
@@ -276,15 +282,11 @@ struct dsi_panel {
 	enum dsi_panel_physical_type panel_type;
 
 	struct dsi_panel_ops panel_ops;
-#if IS_ENABLED(CONFIG_DISPLAY_SAMSUNG)
-	void *panel_private;
-	struct device_node *self_display_of_node;
-	struct dsi_parser_utils self_display_utils;
-	struct device_node *mafpc_of_node;
-	struct dsi_parser_utils mafpc_utils;
-	struct device_node *test_mode_of_node;
-	struct dsi_parser_utils test_mode_utils;
-#endif
+
+	struct dsi_display_refresh_rate_cmd_set nt_cmd_sets[DSI_CMD_SFM_MAX];
+
+	struct brightness_alpha_pair *fod_dim_lut;
+	unsigned int fod_dim_lut_len;
 };
 
 static inline bool dsi_panel_ulps_feature_enabled(struct dsi_panel *panel)
