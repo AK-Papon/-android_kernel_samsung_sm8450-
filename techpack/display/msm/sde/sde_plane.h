@@ -359,4 +359,15 @@ void sde_plane_static_img_control(struct drm_plane *plane,
 		enum sde_crtc_cache_state state);
 
 void sde_plane_add_data_to_minidump_va(struct drm_plane *plane);
+
+/**
+ * sde_plane_property_is_dirty - check if property is dirty
+ * @plane_state: Pointer to drm plane state structure
+ * @property_idx: property index
+ */
+bool sde_plane_property_is_dirty(struct drm_plane_state *plane_state,
+		uint32_t property_idx);
+
+int sde_plane_is_fod_layer(const struct drm_plane_state *drm_state);
+
 #endif /* _SDE_PLANE_H_ */
