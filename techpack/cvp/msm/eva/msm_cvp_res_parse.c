@@ -11,7 +11,6 @@
 #include "msm_cvp_debug.h"
 #include "msm_cvp_resources.h"
 #include "msm_cvp_res_parse.h"
-#include "cvp_core_hfi.h"
 #include "soc/qcom/secure_buffer.h"
 
 enum clock_properties {
@@ -105,7 +104,7 @@ static inline void msm_cvp_free_clock_table(
 	res->clock_set.count = 0;
 }
 
-void eva_msm_cvp_free_platform_resources(
+void cvp_msm_cvp_free_platform_resources(
 			struct msm_cvp_platform_resources *res)
 {
 	msm_cvp_free_clock_table(res);
@@ -258,6 +257,14 @@ err_qdss_addr_tbl:
 	return rc;
 }
 
+static int msm_cvp_load_fw_name(struct msm_cvp_platform_resources *res)
+{
+	struct platform_device *pdev = res->pdev;
+
+	return of_property_read_string_index(pdev->dev.of_node,
+				"cvp,firmware-name", 0, &res->fw_name);
+}
+
 static int msm_cvp_load_subcache_info(struct msm_cvp_platform_resources *res)
 {
 	int rc = 0, num_subcaches = 0, c;
@@ -303,7 +310,7 @@ err_load_subcache_table_fail:
 }
 
 /**
- * msm_cvp_load_u32_table() - load dtsi table entries
+ * msm_cvp_load_u32_table21() - load dtsi table entries
  * @pdev: A pointer to the platform device.
  * @of_node:      A pointer to the device node.
  * @table_name:   A pointer to the dtsi table entry name.
@@ -319,7 +326,7 @@ err_load_subcache_table_fail:
  *
  * Return:        Return '0' for success else appropriate error value.
  */
-int msm_cvp_load_u32_table(struct platform_device *pdev,
+int msm_cvp_load_u32_table21(struct platform_device *pdev,
 		struct device_node *of_node, char *table_name, int struct_size,
 		u32 **table, u32 *num_elements)
 {
@@ -356,7 +363,7 @@ int msm_cvp_load_u32_table(struct platform_device *pdev,
 
 	return rc;
 }
-EXPORT_SYMBOL(msm_cvp_load_u32_table);
+EXPORT_SYMBOL(msm_cvp_load_u32_table21);
 
 /* A comparator to compare loads (needed later on) */
 static int cmp(const void *a, const void *b)
@@ -377,7 +384,7 @@ static int msm_cvp_load_allowed_clocks_table(
 		return 0;
 	}
 
-	rc = msm_cvp_load_u32_table(pdev, pdev->dev.of_node,
+	rc = msm_cvp_load_u32_table21(pdev, pdev->dev.of_node,
 				"qcom,allowed-clock-rates",
 				sizeof(*res->allowed_clks_tbl),
 				(u32 **)&res->allowed_clks_tbl,
@@ -598,7 +605,6 @@ static int msm_cvp_load_clock_table(
 {
 	int rc = 0, num_clocks = 0, c = 0;
 	struct platform_device *pdev = res->pdev;
-	int *clock_ids = NULL;
 	int *clock_props = NULL;
 	struct clock_set *clocks = &res->clock_set;
 
@@ -609,23 +615,6 @@ static int msm_cvp_load_clock_table(
 		clocks->count = 0;
 		rc = 0;
 		goto err_load_clk_table_fail;
-	}
-
-	clock_ids = devm_kzalloc(&pdev->dev, num_clocks *
-		sizeof(*clock_ids), GFP_KERNEL);
-	if (!clock_ids) {
-		dprintk(CVP_ERR, "No memory to read clock ids\n");
-		rc = -ENOMEM;
-		goto err_load_clk_table_fail;
-	}
-
-	rc = of_property_read_u32_array(pdev->dev.of_node,
-		"clock-ids", clock_ids,
-		num_clocks);
-	if (rc) {
-		dprintk(CVP_CORE, "Failed to read clock ids: %d\n", rc);
-		eva_msm_cvp_mmrm_enabled = false;
-		dprintk(CVP_CORE, "flag eva_msm_cvp_mmrm_enabled disabled\n");
 	}
 
 	clock_props = devm_kzalloc(&pdev->dev, num_clocks *
@@ -661,9 +650,6 @@ static int msm_cvp_load_clock_table(
 		of_property_read_string_index(pdev->dev.of_node,
 				"clock-names", c, &vc->name);
 
-		if (eva_msm_cvp_mmrm_enabled == true)
-			vc->clk_id = clock_ids[c];
-
 		if (clock_props[c] & CLOCK_PROP_HAS_SCALING) {
 			vc->has_scaling = true;
 		} else {
@@ -676,8 +662,8 @@ static int msm_cvp_load_clock_table(
 		else
 			vc->has_mem_retention = false;
 
-		dprintk(CVP_CORE, "Found clock %s id %d: scale-able = %s\n",
-			vc->name, vc->clk_id, vc->count ? "yes" : "no");
+		dprintk(CVP_CORE, "Found clock %s: scale-able = %s\n", vc->name,
+			vc->count ? "yes" : "no");
 	}
 
 	return 0;
@@ -746,12 +732,12 @@ static int find_key_value(struct msm_cvp_platform_data *platform_data,
 	return 0;
 }
 
-int eva_cvp_read_platform_resources_from_drv_data(
+int cvp_read_platform_resources_from_drv_data(
 		struct msm_cvp_core *core)
 {
 	struct msm_cvp_platform_data *platform_data;
 	struct msm_cvp_platform_resources *res;
-	int rc = 0, i;
+	int rc = 0;
 
 	if (!core || !core->platform_data) {
 		dprintk(CVP_ERR, "%s Invalid data\n", __func__);
@@ -762,9 +748,9 @@ int eva_cvp_read_platform_resources_from_drv_data(
 
 	res->sku_version = platform_data->sku_version;
 
-	res->fw_name = "evass";
+	// res->fw_name = "evass";
 
-	dprintk(CVP_CORE, "Firmware filename: %s\n", res->fw_name);
+	// dprintk(CVP_CORE, "Firmware filename: %s\n", res->fw_name);
 
 	res->auto_pil = find_key_value(platform_data,
 			"qcom,auto-pil");
@@ -772,8 +758,8 @@ int eva_cvp_read_platform_resources_from_drv_data(
 	res->dsp_enabled = find_key_value(platform_data,
 			"qcom,dsp-enabled");
 
-	res->max_ssr_allowed = find_key_value(platform_data,
-			"qcom,max-ssr-allowed");
+	res->max_load = find_key_value(platform_data,
+			"qcom,max-hw-load");
 
 	res->sw_power_collapsible = find_key_value(platform_data,
 			"qcom,sw-power-collapse");
@@ -781,13 +767,8 @@ int eva_cvp_read_platform_resources_from_drv_data(
 	res->debug_timeout = find_key_value(platform_data,
 			"qcom,debug-timeout");
 
-	res->pm_qos.latency_us = find_key_value(platform_data,
+	res->pm_qos_latency_us = find_key_value(platform_data,
 			"qcom,pm-qos-latency-us");
-	res->pm_qos.silver_count = 4;
-	for (i = 0; i < res->pm_qos.silver_count; i++)
-		res->pm_qos.silver_cores[i] = i;
-	res->pm_qos.off_vote_cnt = 0;
-	spin_lock_init(&res->pm_qos.lock);
 
 	res->max_secure_inst_count = find_key_value(platform_data,
 			"qcom,max-secure-instances");
@@ -807,12 +788,11 @@ int eva_cvp_read_platform_resources_from_drv_data(
 
 	res->vpu_ver = platform_data->vpu_ver;
 	res->ubwc_config = platform_data->ubwc_config;
-	res->fatal_ssr = false;
 	return rc;
 
 }
 
-int eva_cvp_read_platform_resources_from_dt(
+int cvp_read_platform_resources_from_dt(
 		struct msm_cvp_platform_resources *res)
 {
 	struct platform_device *pdev = res->pdev;
@@ -835,6 +815,11 @@ int eva_cvp_read_platform_resources_from_dt(
 
 	kres = platform_get_resource(pdev, IORESOURCE_IRQ, 0);
 	res->irq = kres ? kres->start : -1;
+
+	rc = msm_cvp_load_fw_name(res);
+	dprintk(CVP_CORE, "EVA fw: %s found.\n", res->fw_name);
+	if (rc)
+		dprintk(CVP_WARN, "Failed to load fw name info: %d\n", rc);
 
 	rc = msm_cvp_load_subcache_info(res);
 	if (rc)
@@ -951,13 +936,12 @@ remove_cb:
 	return rc;
 }
 
-int eva_msm_cvp_smmu_fault_handler(struct iommu_domain *domain,
+int cvp_msm_cvp_smmu_fault_handler(struct iommu_domain *domain,
 		struct device *dev, unsigned long iova, int flags, void *token)
 {
 	struct msm_cvp_core *core = token;
-	struct iris_hfi_device *hdev;
 	struct msm_cvp_inst *inst;
-	bool log = false;
+	u32 *pfaddr = &core->last_fault_addr;
 
 	if (!domain || !core) {
 		dprintk(CVP_ERR, "%s - invalid param %pK %pK\n",
@@ -965,20 +949,23 @@ int eva_msm_cvp_smmu_fault_handler(struct iommu_domain *domain,
 		return -EINVAL;
 	}
 
-	core->smmu_fault_count++;
-	if (!core->last_fault_addr)
-		core->last_fault_addr = iova;
-	dprintk(CVP_ERR, "%s - faulting address: %lx, %d\n",
-		__func__, iova, core->smmu_fault_count);
+	if (core->smmu_fault_handled) {
+		if (core->resources.non_fatal_pagefaults) {
+			WARN_ONCE(1, "%s: non-fatal pagefault address: %lx\n",
+					__func__, iova);
+			*pfaddr = (*pfaddr == 0) ? iova : (*pfaddr);
+			return 0;
+		}
+	}
+
+	dprintk(CVP_ERR, "%s - faulting address: %lx\n", __func__, iova);
 
 	mutex_lock(&core->lock);
-	log = (core->log.snapshot_index > 0)? false : true;
 	list_for_each_entry(inst, &core->instances, list) {
-		eva_msm_cvp_print_inst_bufs(inst, log);
+		cvp_msm_cvp_print_inst_bufs(inst);
 	}
-	hdev = core->device->hfi_device_data;
-	if (hdev)
-		hdev->error = CVP_ERR_NOC_ERROR;
+	core->smmu_fault_handled = true;
+
 	mutex_unlock(&core->lock);
 	/*
 	 * Return -EINVAL to elicit the default behaviour of smmu driver.
@@ -1058,7 +1045,7 @@ static int msm_cvp_populate_context_bank(struct device *dev,
 	}
 
 	iommu_set_fault_handler(cb->domain,
-		eva_msm_cvp_smmu_fault_handler, (void *)core);
+		cvp_msm_cvp_smmu_fault_handler, (void *)core);
 
 	return 0;
 
@@ -1067,7 +1054,7 @@ err_setup_cb:
 	return rc;
 }
 
-int eva_cvp_read_context_bank_resources_from_dt(struct platform_device *pdev)
+int cvp_read_context_bank_resources_from_dt(struct platform_device *pdev)
 {
 	struct msm_cvp_core *core;
 	int rc = 0;
@@ -1097,7 +1084,7 @@ int eva_cvp_read_context_bank_resources_from_dt(struct platform_device *pdev)
 	return rc;
 }
 
-int eva_cvp_read_bus_resources_from_dt(struct platform_device *pdev)
+int cvp_read_bus_resources_from_dt(struct platform_device *pdev)
 {
 	struct msm_cvp_core *core;
 
@@ -1120,7 +1107,7 @@ int eva_cvp_read_bus_resources_from_dt(struct platform_device *pdev)
 	return msm_cvp_populate_bus(&pdev->dev, &core->resources);
 }
 
-int eva_cvp_read_mem_cdsp_resources_from_dt(struct platform_device *pdev)
+int cvp_read_mem_cdsp_resources_from_dt(struct platform_device *pdev)
 {
 	struct msm_cvp_core *core;
 

@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2018-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #include <linux/compat.h>
@@ -24,7 +23,7 @@ static int _get_pkt_hdr_from_user(struct eva_kmd_arg __user *up,
 	if (get_user(pkt_hdr->packet_type, &u->pkt_data[1]))
 		return -EFAULT;
 
-	if (eva_get_pkt_index(pkt_hdr) < 0) {
+	if (cvp_get_pkt_index(pkt_hdr) < 0) {
 		dprintk(CVP_ERR, "user mode provides incorrect hfi\n");
 		goto set_default_pkt_hdr;
 	}
@@ -38,7 +37,7 @@ static int _get_pkt_hdr_from_user(struct eva_kmd_arg __user *up,
 	return 0;
 
 set_default_pkt_hdr:
-	pkt_hdr->size = eva_get_msg_size(hdr);
+	pkt_hdr->size = cvp_get_msg_size(hdr);
 	return 0;
 }
 
@@ -64,14 +63,14 @@ static int _get_fence_pkt_hdr_from_user(struct eva_kmd_arg __user *up,
 /* Size is in unit of u32 */
 static int _copy_pkt_from_user(struct eva_kmd_arg *kp,
 		struct eva_kmd_arg __user *up,
-		unsigned int start, unsigned int size)
+		unsigned int size)
 {
 	struct eva_kmd_hfi_packet *k, *u;
 	int i;
 
 	k = &kp->data.hfi_pkt;
 	u = &up->data.hfi_pkt;
-	for (i = start; i < size; i++)
+	for (i = 0; i < size; i++)
 		if (get_user(k->pkt_data[i], &u->pkt_data[i]))
 			return -EFAULT;
 
@@ -159,13 +158,13 @@ static int _copy_sysprop_from_user(struct eva_kmd_arg *kp,
 	if (get_user(k->prop_num, &u->prop_num))
 		return -EFAULT;
 
-	if (k->prop_num < 1 || k->prop_num > MAX_KMD_PROP_NUM_PER_PACKET) {
+	if (k->prop_num < 1 || k->prop_num > 32) {
 		dprintk(CVP_ERR, "Num of prop out of range %d\n", k->prop_num);
 		return -EFAULT;
 	}
 
-	return _copy_pkt_from_user(kp, up, 1,
-		(k->prop_num * ((sizeof(struct eva_kmd_sys_property) >> 2))));
+	return _copy_pkt_from_user(kp, up,
+		(k->prop_num*((sizeof(struct eva_kmd_sys_property)>>2)+1)));
 }
 
 static int _copy_pkt_to_user(struct eva_kmd_arg *kp,
@@ -365,7 +364,7 @@ static int convert_from_user(struct eva_kmd_arg *kp,
 			return -EFAULT;
 		}
 
-		rc = _copy_pkt_from_user(kp, up, 0, (pkt_hdr.size >> 2));
+		rc = _copy_pkt_from_user(kp, up, (pkt_hdr.size >> 2));
 		break;
 	}
 	case EVA_KMD_SEND_FENCE_CMD_PKT:
@@ -378,7 +377,7 @@ static int convert_from_user(struct eva_kmd_arg *kp,
 		dprintk(CVP_HFI, "system call cmd pkt: %d 0x%x\n",
 				pkt_hdr.size, pkt_hdr.packet_type);
 
-		pkt_idx = eva_get_pkt_index(&pkt_hdr);
+		pkt_idx = cvp_get_pkt_index(&pkt_hdr);
 		if (pkt_idx < 0) {
 			dprintk(CVP_ERR, "%s incorrect packet %d, %x\n",
 				__func__,
@@ -477,7 +476,7 @@ static int convert_to_user(struct eva_kmd_arg *kp, unsigned long arg)
 		k = &kp->data.hfi_pkt;
 		u = &up->data.hfi_pkt;
 		hdr = (struct cvp_hfi_msg_session_hdr *)k;
-		size = eva_get_msg_size(hdr) >> 2;
+		size = cvp_get_msg_size(hdr) >> 2;
 		for (i = 0; i < size; i++)
 			if (put_user(k->pkt_data[i], &u->pkt_data[i]))
 				return -EFAULT;
@@ -610,7 +609,7 @@ static long cvp_ioctl(struct msm_cvp_inst *inst,
 		return -EFAULT;
 	}
 
-	rc = msm_cvp_private((void *)inst, cmd, karg);
+	rc = msm_cvp_private21((void *)inst, cmd, karg);
 	if (rc) {
 		dprintk(CVP_ERR, "%s: failed cmd type %x %d\n",
 			__func__, karg->type, rc);
@@ -629,7 +628,7 @@ static long cvp_ioctl(struct msm_cvp_inst *inst,
 	return rc;
 }
 
-long eva_cvp_unblocked_ioctl(struct file *filp,
+long cvp_unblocked_ioctl(struct file *filp,
 		unsigned int cmd, unsigned long arg)
 {
 	struct msm_cvp_inst *inst;
@@ -643,7 +642,7 @@ long eva_cvp_unblocked_ioctl(struct file *filp,
 	return cvp_ioctl(inst, cmd, arg);
 }
 
-long eva_cvp_compat_ioctl(struct file *filp,
+long cvp_compat_ioctl(struct file *filp,
 		unsigned int cmd, unsigned long arg)
 {
 	struct msm_cvp_inst *inst;

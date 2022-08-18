@@ -40,7 +40,7 @@ static int __load_fw_to_memory(struct platform_device *pdev,
 		dprintk(CVP_ERR, "%s: Invalid fw name\n", __func__);
 		return -EINVAL;
 	}
-	scnprintf(firmware_name, ARRAY_SIZE(firmware_name), "%s.mdt", fw_name);
+	scnprintf(firmware_name, ARRAY_SIZE(firmware_name), "%s.mbn", fw_name);
 
 	rc = of_property_read_u32(pdev->dev.of_node, "pas-id", &pas_id);
 	if (rc) {
@@ -105,7 +105,7 @@ static int __load_fw_to_memory(struct platform_device *pdev,
 				__func__, rc, firmware_name);
 		goto exit;
 	}
-	rc = eva_md_eva_static_dump_register("evafwdata", (uintptr_t)virt, phys, EVAFW_IMAGE_SIZE);
+	rc = cvp_md_eva_static_dump_register("evafwdata", (uintptr_t)virt, phys, EVAFW_IMAGE_SIZE);
 	if (rc) {
 		dprintk(CVP_ERR, "%s: error %d in dumping \"%s\"\n",
 				__func__, rc, firmware_name);
@@ -125,7 +125,7 @@ exit:
 	return rc;
 }
 
-int eva_load_cvp_fw_impl(struct iris_hfi_device *device)
+int cvp_load_cvp_fw_impl(struct iris_hfi_device *device)
 {
 	int rc = 0;
 
@@ -142,10 +142,10 @@ int eva_load_cvp_fw_impl(struct iris_hfi_device *device)
 	return rc;
 }
 
-int uneva_load_cvp_fw_impl(struct iris_hfi_device *device)
+int uncvp_load_cvp_fw_impl(struct iris_hfi_device *device)
 {
 	qcom_scm_pas_shutdown(device->resources.fw.cookie);
 	device->resources.fw.cookie = 0;
-	eva_md_eva_static_dump_unregister();
+	cvp_md_eva_static_dump_unregister();
 	return 0;
 }

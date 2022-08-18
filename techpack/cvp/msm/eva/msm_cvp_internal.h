@@ -20,6 +20,7 @@
 #include <linux/kthread.h>
 #include <linux/dma-mapping.h>
 #include "msm_cvp_core.h"
+#include <media/msm_media_info.h>
 #include <media/msm_eva_private.h>
 #include "cvp_hfi_api.h"
 #include "cvp_hfi_helper.h"
@@ -32,9 +33,9 @@
 #define FENCE_WAIT_SIGNAL_RETRY_TIMES 20
 #define FENCE_BIT (1ULL << 63)
 
-#define FENCE_DMM_ICA_ENABLED_IDX 0
-#define FENCE_DMM_DS_IDX 1
-#define FENCE_DMM_OUTPUT_IDX 7
+#define FENCE_DME_ICA_ENABLED_IDX 0
+#define FENCE_DME_DS_IDX 1
+#define FENCE_DME_OUTPUT_IDX 7
 
 #define SYS_MSG_START HAL_SYS_INIT_DONE
 #define SYS_MSG_END HAL_SYS_ERROR
@@ -43,7 +44,7 @@
 #define SYS_MSG_INDEX(__msg) (__msg - SYS_MSG_START)
 #define SESSION_MSG_INDEX(__msg) (__msg - SESSION_MSG_START)
 
-#define ARP_BUF_SIZE 0x300000
+#define ARP_BUF_SIZE 0x100000
 
 #define CVP_RT_PRIO_THRESHOLD 1
 
@@ -59,14 +60,6 @@ enum cvp_core_state {
  * Do not change the enum values unless
  * you know what you are doing
  */
-
-enum hw_block {
-	CVP_FDU = 0x0001,
-	CVP_ICA,
-	CVP_MPU,
-	CVP_OD
-};
-
 enum instance_state {
 	MSM_CVP_CORE_UNINIT_DONE = 0x0001,
 	MSM_CVP_CORE_INIT,
@@ -121,22 +114,12 @@ struct msm_cvp_ubwc_config_data {
 	u32 bank_spreading;
 };
 
-struct msm_cvp_qos_setting {
-	u32 axi_qos;
-	u32 prioritylut_low;
-	u32 prioritylut_high;
-	u32 urgency_low;
-	u32 dangerlut_low;
-	u32 safelut_low;
-};
-
 struct msm_cvp_platform_data {
 	struct msm_cvp_common_data *common_data;
 	unsigned int common_data_length;
 	unsigned int sku_version;
 	uint32_t vpu_ver;
 	struct msm_cvp_ubwc_config_data *ubwc_config;
-	struct msm_cvp_qos_setting *noc_qos;
 };
 
 struct msm_cvp_drv {
@@ -258,8 +241,6 @@ struct cvp_session_prop {
 	u32 ddr_cache;
 	u32 ddr_op_cache;
 	u32 fps[HFI_MAX_HW_THREADS];
-	u32 dump_offset;
-	u32 dump_size;
 };
 
 enum cvp_event_t {
@@ -269,76 +250,12 @@ enum cvp_event_t {
 	CVP_MAX_CLIENTS_EVENT,
 	CVP_HW_UNSUPPORTED_EVENT,
 	CVP_INVALID_EVENT,
-	CVP_DUMP_EVENT,
 };
 
 struct cvp_session_event {
 	spinlock_t lock;
 	enum cvp_event_t event;
 	wait_queue_head_t wq;
-};
-
-#define MAX_ENTRIES 64
-
-struct smem_data {
-	u32 size;
-	u32 flags;
-	u32 device_addr;
-	u32 bitmap_index;
-	u32 refcount;
-};
-
-struct cvp_buf_data {
-	u32 device_addr;
-	u32 size;
-};
-
-struct inst_snapshot {
-	void *session;
-	u32 smem_index;
-	u32 dsp_index;
-	u32 persist_index;
-	struct smem_data smem_log[MAX_ENTRIES];
-	struct cvp_buf_data dsp_buf_log[MAX_ENTRIES];
-	struct cvp_buf_data persist_buf_log[MAX_ENTRIES];
-};
-
-struct cvp_noc_log {
-	u32 used;
-	u32 err_ctrl_swid_low;
-	u32 err_ctrl_swid_high;
-	u32 err_ctrl_mainctl_low;
-	u32 err_ctrl_errvld_low;
-	u32 err_ctrl_errclr_low;
-	u32 err_ctrl_errlog0_low;
-	u32 err_ctrl_errlog0_high;
-	u32 err_ctrl_errlog1_low;
-	u32 err_ctrl_errlog1_high;
-	u32 err_ctrl_errlog2_low;
-	u32 err_ctrl_errlog2_high;
-	u32 err_ctrl_errlog3_low;
-	u32 err_ctrl_errlog3_high;
-	u32 err_core_swid_low;
-	u32 err_core_swid_high;
-	u32 err_core_mainctl_low;
-	u32 err_core_errvld_low;
-	u32 err_core_errclr_low;
-	u32 err_core_errlog0_low;
-	u32 err_core_errlog0_high;
-	u32 err_core_errlog1_low;
-	u32 err_core_errlog1_high;
-	u32 err_core_errlog2_low;
-	u32 err_core_errlog2_high;
-	u32 err_core_errlog3_low;
-	u32 err_core_errlog3_high;
-	u32 arp_test_bus[16];
-	u32 dma_test_bus[512];
-};
-
-struct cvp_debug_log {
-	struct cvp_noc_log noc_log;
-	u32 snapshot_index;
-	struct inst_snapshot snapshot[16];
 };
 
 struct msm_cvp_core {
@@ -362,25 +279,19 @@ struct msm_cvp_core {
 	struct delayed_work fw_unload_work;
 	struct work_struct ssr_work;
 	enum hal_ssr_trigger_type ssr_type;
-	u32 smmu_fault_count;
+	bool smmu_fault_handled;
 	u32 last_fault_addr;
-	u32 ssr_count;
 	bool trigger_ssr;
 	unsigned long curr_freq;
-	unsigned long orig_core_sum;
 	struct cvp_cycle_info dyn_clk;
 	atomic64_t kernel_trans_id;
-	struct cvp_debug_log log;
 };
 
 struct msm_cvp_inst {
 	struct list_head list;
-	struct list_head dsp_list;
 	struct mutex sync_lock, lock;
 	struct msm_cvp_core *core;
 	enum session_type session_type;
-	u32 process_id;
-	struct task_struct *task;
 	struct cvp_session_queue session_queue;
 	struct cvp_session_queue session_queue_fence;
 	struct cvp_session_event event_handler;
@@ -399,28 +310,25 @@ struct msm_cvp_inst {
 	struct msm_cvp_capability capability;
 	struct kref kref;
 	struct cvp_session_prop prop;
-	/* error_code will be cleared after being returned to user mode */
-	u32 error_code;
-	/* prev_error_code saves value of error_code before it's cleared */
-	u32 prev_error_code;
+	u32 cur_cmd_type;
 	struct synx_session synx_session_id;
 	struct cvp_fence_queue fence_cmd_queue;
 };
 
-extern struct msm_cvp_drv *eva_cvp_driver;
+extern struct msm_cvp_drv *cvp_driver;
 
-void eva_cvp_handle_cmd_response(enum hal_command_response cmd, void *data);
-int eva_msm_cvp_trigger_ssr(struct msm_cvp_core *core,
+void cvp_handle_cmd_response(enum hal_command_response cmd, void *data);
+int cvp_msm_cvp_trigger_ssr(struct msm_cvp_core *core,
 	enum hal_ssr_trigger_type type);
-int eva_msm_cvp_noc_error_info(struct msm_cvp_core *core);
-void eva_msm_cvp_comm_handle_thermal_event(void);
+int cvp_msm_cvp_noc_error_info(struct msm_cvp_core *core);
+void cvp_msm_cvp_comm_handle_thermal_event(void);
 
-void eva_msm_cvp_fw_unload_handler(struct work_struct *work);
-void eva_msm_cvp_ssr_handler(struct work_struct *work);
+void cvp_msm_cvp_fw_unload_handler(struct work_struct *work);
+void cvp_msm_cvp_ssr_handler(struct work_struct *work);
 /*
  * XXX: normally should be in msm_cvp_core.h, but that's meant for public APIs,
  * whereas this is private
  */
-int eva_msm_cvp_destroy(struct msm_cvp_inst *inst);
-void *eva_cvp_get_drv_data(struct device *dev);
+int cvp_msm_cvp_destroy(struct msm_cvp_inst *inst);
+void *cvp_get_drv_data(struct device *dev);
 #endif

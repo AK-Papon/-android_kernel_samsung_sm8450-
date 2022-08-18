@@ -232,7 +232,6 @@ struct iris_hfi_device {
 	u32 device_id;
 	u32 clk_freq;
 	u32 last_packet_type;
-	u32 error;
 	unsigned long clk_bitrate;
 	unsigned long scaled_rate;
 	struct msm_cvp_gov_data bus_vote;
@@ -267,12 +266,12 @@ struct iris_hfi_device {
 	struct iris_hfi_vpu_ops *vpu_ops;
 };
 
-void eva_cvp_iris_hfi_delete_device(void *device);
+void cvp_iris_hfi_delete_device(void *device);
 
-int eva_cvp_iris_hfi_initialize(struct cvp_hfi_device *hdev, u32 device_id,
+int cvp_iris_hfi_initialize(struct cvp_hfi_device *hdev, u32 device_id,
 		struct msm_cvp_platform_resources *res,
 		hfi_cmd_response_callback callback);
 
-int eva_load_cvp_fw_impl(struct iris_hfi_device *device);
-int uneva_load_cvp_fw_impl(struct iris_hfi_device *device);
+int cvp_load_cvp_fw_impl(struct iris_hfi_device *device);
+int uncvp_load_cvp_fw_impl(struct iris_hfi_device *device);
 #endif

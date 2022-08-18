@@ -15,7 +15,7 @@
  * sensible index.
  */
 
-int eva_cvp_create_pkt_cmd_sys_init(struct cvp_hfi_cmd_sys_init_packet *pkt,
+int cvp_create_pkt_cmd_sys_init(struct cvp_hfi_cmd_sys_init_packet *pkt,
 			   u32 arch_type)
 {
 	int rc = 0;
@@ -29,7 +29,7 @@ int eva_cvp_create_pkt_cmd_sys_init(struct cvp_hfi_cmd_sys_init_packet *pkt,
 	return rc;
 }
 
-int eva_cvp_create_pkt_cmd_sys_pc_prep(struct cvp_hfi_cmd_sys_pc_prep_packet *pkt)
+int cvp_create_pkt_cmd_sys_pc_prep(struct cvp_hfi_cmd_sys_pc_prep_packet *pkt)
 {
 	int rc = 0;
 
@@ -41,7 +41,7 @@ int eva_cvp_create_pkt_cmd_sys_pc_prep(struct cvp_hfi_cmd_sys_pc_prep_packet *pk
 	return rc;
 }
 
-int eva_cvp_create_pkt_cmd_sys_debug_config(
+int cvp_create_pkt_cmd_sys_debug_config(
 	struct cvp_hfi_cmd_sys_set_property_packet *pkt,
 	u32 mode)
 {
@@ -58,13 +58,13 @@ int eva_cvp_create_pkt_cmd_sys_debug_config(
 	hfi = (struct cvp_hfi_debug_config *) &pkt->rg_property_data[1];
 	hfi->debug_config = mode;
 	hfi->debug_mode = HFI_DEBUG_MODE_QUEUE;
-	if (eva_msm_cvp_fw_debug_mode
+	if (cvp_msm_cvp_fw_debug_mode
 			<= (HFI_DEBUG_MODE_QUEUE | HFI_DEBUG_MODE_QDSS))
-		hfi->debug_mode = eva_msm_cvp_fw_debug_mode;
+		hfi->debug_mode = cvp_msm_cvp_fw_debug_mode;
 	return 0;
 }
 
-int eva_cvp_create_pkt_cmd_sys_coverage_config(
+int cvp_create_pkt_cmd_sys_coverage_config(
 	struct cvp_hfi_cmd_sys_set_property_packet *pkt,
 	u32 mode)
 {
@@ -84,7 +84,7 @@ int eva_cvp_create_pkt_cmd_sys_coverage_config(
 	return 0;
 }
 
-int eva_cvp_create_pkt_cmd_sys_set_idle_indicator(
+int cvp_create_pkt_cmd_sys_set_idle_indicator(
 	struct cvp_hfi_cmd_sys_set_property_packet *pkt,
 	u32 mode)
 {
@@ -104,7 +104,7 @@ int eva_cvp_create_pkt_cmd_sys_set_idle_indicator(
 	return 0;
 }
 
-int eva_cvp_create_pkt_cmd_sys_set_resource(
+int cvp_create_pkt_cmd_sys_set_resource(
 		struct cvp_hfi_cmd_sys_set_resource_packet *pkt,
 		struct cvp_resource_hdr *res_hdr,
 		void *res_value)
@@ -162,7 +162,7 @@ int eva_cvp_create_pkt_cmd_sys_set_resource(
 	return rc;
 }
 
-int eva_cvp_create_pkt_cmd_sys_release_resource(
+int cvp_create_pkt_cmd_sys_release_resource(
 		struct cvp_hfi_cmd_sys_release_resource_packet *pkt,
 		struct cvp_resource_hdr *res_hdr)
 {
@@ -196,7 +196,7 @@ int eva_cvp_create_pkt_cmd_sys_release_resource(
 	return rc;
 }
 
-inline int eva_cvp_create_pkt_cmd_sys_session_init(
+inline int cvp_create_pkt_cmd_sys_session_init(
 		struct cvp_hfi_cmd_sys_session_init_packet *pkt,
 		struct cvp_hal_session *session)
 {
@@ -262,7 +262,7 @@ static int create_pkt_cmd_sys_ubwc_config(
 	return rc;
 }
 
-int eva_cvp_create_pkt_cmd_session_cmd(struct cvp_hal_session_cmd_pkt *pkt,
+int cvp_create_pkt_cmd_session_cmd(struct cvp_hal_session_cmd_pkt *pkt,
 			int pkt_type, struct cvp_hal_session *session)
 {
 	int rc = 0;
@@ -277,7 +277,7 @@ int eva_cvp_create_pkt_cmd_session_cmd(struct cvp_hal_session_cmd_pkt *pkt,
 	return rc;
 }
 
-int eva_cvp_create_pkt_cmd_sys_power_control(
+int cvp_create_pkt_cmd_sys_power_control(
 	struct cvp_hfi_cmd_sys_set_property_packet *pkt, u32 enable)
 {
 	struct cvp_hfi_enable *hfi;
@@ -297,7 +297,7 @@ int eva_cvp_create_pkt_cmd_sys_power_control(
 	return 0;
 }
 
-int eva_cvp_create_pkt_cmd_session_set_buffers(
+int cvp_create_pkt_cmd_session_set_buffers(
 		void *cmd,
 		struct cvp_hal_session *session,
 		u32 iova,
@@ -319,7 +319,7 @@ int eva_cvp_create_pkt_cmd_session_set_buffers(
 	return rc;
 }
 
-int eva_cvp_create_pkt_cmd_session_release_buffers(
+int cvp_create_pkt_cmd_session_release_buffers(
 		void *cmd,
 		struct cvp_hal_session *session)
 {
@@ -339,7 +339,7 @@ int eva_cvp_create_pkt_cmd_session_release_buffers(
 	return 0;
 }
 
-int eva_cvp_create_pkt_cmd_session_send(
+int cvp_create_pkt_cmd_session_send(
 		struct eva_kmd_hfi_packet *out_pkt,
 		struct cvp_hal_session *session,
 		struct eva_kmd_hfi_packet *in_pkt)
@@ -357,13 +357,13 @@ int eva_cvp_create_pkt_cmd_session_send(
 	if (ptr->session_id != hash32_ptr(session))
 		goto error_hfi_packet;
 
-	def_idx = eva_get_pkt_index(ptr);
+	def_idx = cvp_get_pkt_index(ptr);
 	if (def_idx < 0) {
 		memcpy(out_pkt, in_pkt, ptr->size);
 		return 0;
 	}
 
-	if (eva_cvp_hfi_defs[def_idx].type != ptr->packet_type)
+	if (cvp_hfi_defs[def_idx].type != ptr->packet_type)
 		goto error_hfi_packet;
 
 	memcpy(out_pkt, in_pkt, ptr->size);
@@ -398,7 +398,7 @@ static int get_hfi_ssr_type(enum hal_ssr_trigger_type type)
 	return rc;
 }
 
-int eva_cvp_create_pkt_ssr_cmd(enum hal_ssr_trigger_type type,
+int cvp_create_pkt_ssr_cmd(enum hal_ssr_trigger_type type,
 		struct cvp_hfi_cmd_sys_test_ssr_packet *pkt)
 {
 	if (!pkt) {
@@ -411,7 +411,7 @@ int eva_cvp_create_pkt_ssr_cmd(enum hal_ssr_trigger_type type,
 	return 0;
 }
 
-int eva_cvp_create_pkt_cmd_sys_image_version(
+int cvp_create_pkt_cmd_sys_image_version(
 		struct cvp_hfi_cmd_sys_get_property_packet *pkt)
 {
 	if (!pkt) {
@@ -426,27 +426,27 @@ int eva_cvp_create_pkt_cmd_sys_image_version(
 }
 
 static struct cvp_hfi_packetization_ops hfi_default = {
-	.sys_init = eva_cvp_create_pkt_cmd_sys_init,
-	.sys_pc_prep = eva_cvp_create_pkt_cmd_sys_pc_prep,
-	.sys_power_control = eva_cvp_create_pkt_cmd_sys_power_control,
-	.sys_set_resource = eva_cvp_create_pkt_cmd_sys_set_resource,
-	.sys_debug_config = eva_cvp_create_pkt_cmd_sys_debug_config,
-	.sys_coverage_config = eva_cvp_create_pkt_cmd_sys_coverage_config,
-	.sys_set_idle_indicator = eva_cvp_create_pkt_cmd_sys_set_idle_indicator,
-	.sys_release_resource = eva_cvp_create_pkt_cmd_sys_release_resource,
-	.sys_image_version = eva_cvp_create_pkt_cmd_sys_image_version,
+	.sys_init = cvp_create_pkt_cmd_sys_init,
+	.sys_pc_prep = cvp_create_pkt_cmd_sys_pc_prep,
+	.sys_power_control = cvp_create_pkt_cmd_sys_power_control,
+	.sys_set_resource = cvp_create_pkt_cmd_sys_set_resource,
+	.sys_debug_config = cvp_create_pkt_cmd_sys_debug_config,
+	.sys_coverage_config = cvp_create_pkt_cmd_sys_coverage_config,
+	.sys_set_idle_indicator = cvp_create_pkt_cmd_sys_set_idle_indicator,
+	.sys_release_resource = cvp_create_pkt_cmd_sys_release_resource,
+	.sys_image_version = cvp_create_pkt_cmd_sys_image_version,
 	.sys_ubwc_config = create_pkt_cmd_sys_ubwc_config,
-	.ssr_cmd = eva_cvp_create_pkt_ssr_cmd,
-	.session_init = eva_cvp_create_pkt_cmd_sys_session_init,
-	.session_cmd = eva_cvp_create_pkt_cmd_session_cmd,
+	.ssr_cmd = cvp_create_pkt_ssr_cmd,
+	.session_init = cvp_create_pkt_cmd_sys_session_init,
+	.session_cmd = cvp_create_pkt_cmd_session_cmd,
 	.session_set_buffers =
-		eva_cvp_create_pkt_cmd_session_set_buffers,
+		cvp_create_pkt_cmd_session_set_buffers,
 	.session_release_buffers =
-		eva_cvp_create_pkt_cmd_session_release_buffers,
-	.session_send = eva_cvp_create_pkt_cmd_session_send,
+		cvp_create_pkt_cmd_session_release_buffers,
+	.session_send = cvp_create_pkt_cmd_session_send,
 };
 
-struct cvp_hfi_packetization_ops *eva_cvp_hfi_get_pkt_ops_handle(
+struct cvp_hfi_packetization_ops *cvp_hfi_get_pkt_ops_handle(
 			enum hfi_packetization_type type)
 {
 	dprintk(CVP_HFI, "%s selected\n",

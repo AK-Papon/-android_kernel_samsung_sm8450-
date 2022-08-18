@@ -8,10 +8,10 @@
 #include <linux/debugfs.h>
 #include <linux/delay.h>
 #include "msm_cvp_internal.h"
-#include "msm_cvp_events.h"
+#include "trace/events/msm_cvp_events.h"
 
 #ifndef CVP_DBG_LABEL
-#define CVP_DBG_LABEL "msm_cvp"
+#define CVP_DBG_LABEL "msm_cvp21"
 #endif
 
 #define CVP_DBG_TAG CVP_DBG_LABEL ": %4s: "
@@ -52,25 +52,26 @@ enum msm_cvp_debugfs_event {
 	MSM_CVP_DEBUGFS_EVENT_FBD,
 };
 
-extern int msm_cvp_debug;
-extern int msm_cvp_debug_out;
-extern int eva_msm_cvp_fw_debug;
-extern int eva_msm_cvp_fw_debug_mode;
-extern int eva_msm_cvp_fw_low_power_mode;
-extern bool eva_msm_cvp_fw_coverage;
-extern bool eva_msm_cvp_thermal_mitigation_disabled;
-extern bool eva_msm_cvp_cacheop_disabled;
-extern int eva_msm_cvp_clock_voting;
-extern bool eva_msm_cvp_syscache_disable;
-extern bool eva_msm_cvp_dsp_disable;
-extern bool eva_msm_cvp_mmrm_enabled;
-extern bool eva_msm_cvp_dcvs_disable;
-extern int eva_msm_cvp_minidump_enable;
+extern int msm_cvp_debug21;
+extern int msm_cvp_debug_out21;
+extern int cvp_msm_cvp_fw_debug;
+extern int cvp_msm_cvp_fw_debug_mode;
+extern int cvp_msm_cvp_fw_low_power_mode;
+extern bool cvp_msm_cvp_fw_coverage;
+extern bool cvp_msm_cvp_thermal_mitigation_disabled;
+extern bool cvp_msm_cvp_cacheop_disabled;
+extern int cvp_msm_cvp_clock_voting;
+extern bool cvp_msm_cvp_syscache_disable;
+extern bool cvp_msm_cvp_dsp_disable;
+extern bool cvp_msm_cvp_mmrm_enabled;
+extern bool cvp_msm_cvp_dcvs_disable;
+extern bool msm_cvp_dsp_driver_enable;
+extern int cvp_msm_cvp_minidump_enable;
 
 #define dprintk(__level, __fmt, arg...)	\
 	do { \
-		if (msm_cvp_debug & __level) { \
-			if (msm_cvp_debug_out == CVP_OUT_PRINTK) { \
+		if (msm_cvp_debug21 & __level) { \
+			if (msm_cvp_debug_out21 == CVP_OUT_PRINTK) { \
 				pr_info(CVP_DBG_TAG __fmt, \
 					get_debug_level_str(__level),	\
 					## arg); \
@@ -85,12 +86,12 @@ extern int eva_msm_cvp_minidump_enable;
 	} while (0)
 
 
-struct dentry *eva_msm_cvp_debugfs_init_drv(void);
-struct dentry *eva_msm_cvp_debugfs_init_core(struct msm_cvp_core *core,
+struct dentry *cvp_msm_cvp_debugfs_init_drv(void);
+struct dentry *cvp_msm_cvp_debugfs_init_core(struct msm_cvp_core *core,
 		struct dentry *parent);
-struct dentry *eva_msm_cvp_debugfs_init_inst(struct msm_cvp_inst *inst,
+struct dentry *cvp_msm_cvp_debugfs_init_inst(struct msm_cvp_inst *inst,
 		struct dentry *parent);
-void eva_msm_cvp_debugfs_deinit_inst(struct msm_cvp_inst *inst);
+void cvp_msm_cvp_debugfs_deinit_inst(struct msm_cvp_inst *inst);
 
 static inline char *get_debug_level_str(int level)
 {
@@ -136,7 +137,7 @@ static inline void show_stats(struct msm_cvp_inst *i)
 
 	for (x = 0; x < MAX_PROFILING_POINTS; x++) {
 		if (i->debug.pdata[x].name[0] &&
-				(msm_cvp_debug & CVP_PROF)) {
+				(msm_cvp_debug21 & CVP_PROF)) {
 			if (i->debug.samples) {
 				dprintk(CVP_PROF, "%s averaged %d ms/sample\n",
 						i->debug.pdata[x].name,

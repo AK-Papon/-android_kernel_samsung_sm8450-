@@ -15,24 +15,25 @@
 #include "cvp_hfi_api.h"
 #include "msm_cvp_clocks.h"
 #include <linux/dma-buf.h>
+#include <media/msm_media_info.h>
 
 #define MAX_EVENTS 30
 #define NUM_CYCLES16X16_HCD_FRAME 95
-#define NUM_CYCLES16X16_DMM_FRAME 600
+#define NUM_CYCLES16X16_DME_FRAME 600
 #define NUM_CYCLES16X16_NCC_FRAME 400
 #define NUM_CYCLES16X16_DS_FRAME  80
 #define NUM_CYCLESFW_FRAME  1680000
-#define NUM_DMM_MAX_FEATURE_POINTS 500
+#define NUM_DME_MAX_FEATURE_POINTS 500
 #define CYCLES_MARGIN_IN_POWEROF2 3
 
-int msm_cvp_poll(void *instance, struct file *filp,
+int msm_cvp_poll21(void *instance, struct file *filp,
 		struct poll_table_struct *wait)
 {
 	return 0;
 }
-EXPORT_SYMBOL(msm_cvp_poll);
+EXPORT_SYMBOL(msm_cvp_poll21);
 
-int msm_cvp_private(void *cvp_inst, unsigned int cmd,
+int msm_cvp_private21(void *cvp_inst, unsigned int cmd,
 		struct eva_kmd_arg *arg)
 {
 	int rc = 0;
@@ -43,11 +44,11 @@ int msm_cvp_private(void *cvp_inst, unsigned int cmd,
 		return -EINVAL;
 	}
 
-	rc = eva_msm_cvp_handle_syscall(inst, arg);
+	rc = cvp_msm_cvp_handle_syscall(inst, arg);
 
 	return rc;
 }
-EXPORT_SYMBOL(msm_cvp_private);
+EXPORT_SYMBOL(msm_cvp_private21);
 
 static bool msm_cvp_check_for_inst_overload(struct msm_cvp_core *core)
 {
@@ -115,23 +116,21 @@ static void __deinit_session_queue(struct msm_cvp_inst *inst)
 	spin_lock(&inst->session_queue.lock);
 	list_for_each_entry_safe(msg, tmpmsg, &inst->session_queue.msgs, node) {
 		list_del_init(&msg->node);
-		kmem_cache_free(eva_cvp_driver->msg_cache, msg);
+		kmem_cache_free(cvp_driver->msg_cache, msg);
 	}
 	inst->session_queue.msg_count = 0;
-	inst->session_queue.state = QUEUE_INVALID;
+	inst->session_queue.state = QUEUE_STOP;
 	spin_unlock(&inst->session_queue.lock);
 
 	wake_up_all(&inst->session_queue.wq);
 }
 
-void *msm_cvp_open(int core_id, int session_type)
+void *msm_cvp_open21(int core_id, int session_type)
 {
 	struct msm_cvp_inst *inst = NULL;
 	struct msm_cvp_core *core = NULL;
 	int rc = 0;
 	int i = 0;
-
-	pr_info(CVP_DBG_TAG "Opening cvp start\n","sess");
 
 	if (core_id >= MSM_CVP_CORES_MAX ||
 			session_type >= MSM_CVP_MAX_DEVICES) {
@@ -139,7 +138,7 @@ void *msm_cvp_open(int core_id, int session_type)
 			core_id, session_type);
 		goto err_invalid_core;
 	}
-	core = eva_get_cvp_core(core_id);
+	core = cvp_get_cvp_core(core_id);
 	if (!core) {
 		dprintk(CVP_ERR,
 			"Failed to find core for core_id = %d\n", core_id);
@@ -156,8 +155,9 @@ void *msm_cvp_open(int core_id, int session_type)
 		dprintk(CVP_ERR, "Instance num reached Max, rejecting session");
 		mutex_lock(&core->lock);
 		list_for_each_entry(inst, &core->instances, list)
-			dprintk(CVP_ERR, "inst %pK, id %d\n",
-				inst, hash32_ptr(inst->session));
+			dprintk(CVP_ERR, "inst %pK, cmd %d id %d\n",
+				inst, inst->cur_cmd_type,
+				hash32_ptr(inst->session));
 		mutex_unlock(&core->lock);
 
 		return NULL;
@@ -199,7 +199,7 @@ void *msm_cvp_open(int core_id, int session_type)
 		init_completion(&inst->completions[i]);
 	}
 
-	eva_msm_cvp_session_init(inst);
+	cvp_msm_cvp_session_init(inst);
 
 	mutex_lock(&core->lock);
 	mutex_lock(&core->clk_lock);
@@ -213,7 +213,7 @@ void *msm_cvp_open(int core_id, int session_type)
 	if (rc)
 		goto fail_init;
 
-	rc = eva_msm_cvp_comm_try_state(inst, MSM_CVP_CORE_INIT_DONE);
+	rc = cvp_msm_cvp_comm_try_state(inst, MSM_CVP_CORE_INIT_DONE);
 	if (rc) {
 		dprintk(CVP_ERR,
 			"Failed to move cvp instance to init state\n");
@@ -221,14 +221,11 @@ void *msm_cvp_open(int core_id, int session_type)
 	}
 
 	inst->debugfs_root =
-		eva_msm_cvp_debugfs_init_inst(inst, core->debugfs_root);
-
-	pr_info(CVP_DBG_TAG "Opening cvp end\n","sess");
+		cvp_msm_cvp_debugfs_init_inst(inst, core->debugfs_root);
 
 	return inst;
 fail_init:
 	__deinit_session_queue(inst);
-	__deinit_fence_queue(inst);
 	mutex_lock(&core->lock);
 	list_del(&inst->list);
 	mutex_unlock(&core->lock);
@@ -245,7 +242,7 @@ fail_init:
 err_invalid_core:
 	return inst;
 }
-EXPORT_SYMBOL(msm_cvp_open);
+EXPORT_SYMBOL(msm_cvp_open21);
 
 static void msm_cvp_clean_sess_queue(struct msm_cvp_inst *inst,
 		struct cvp_session_queue *sq)
@@ -260,8 +257,8 @@ static void msm_cvp_clean_sess_queue(struct msm_cvp_inst *inst,
 			if (ktid) {
 				list_del_init(&mptr->node);
 				sq->msg_count--;
-				eva_msm_cvp_unmap_frame(inst, ktid);
-				kmem_cache_free(eva_cvp_driver->msg_cache, mptr);
+				cvp_msm_cvp_unmap_frame(inst, ktid);
+				kmem_cache_free(cvp_driver->msg_cache, mptr);
 			}
 		}
 	}
@@ -274,7 +271,6 @@ static void msm_cvp_cleanup_instance(struct msm_cvp_inst *inst)
 	int max_retries;
 	struct msm_cvp_frame *frame;
 	struct cvp_session_queue *sq, *sqf;
-	struct cvp_hfi_device *hdev;
 
 	if (!inst) {
 		dprintk(CVP_ERR, "%s: invalid params\n", __func__);
@@ -285,7 +281,7 @@ static void msm_cvp_cleanup_instance(struct msm_cvp_inst *inst)
 	sq = &inst->session_queue;
 
 	max_retries =  inst->core->resources.msm_cvp_hw_rsp_timeout >> 5;
-	eva_msm_cvp_session_queue_stop(inst);
+	cvp_msm_cvp_session_queue_stop(inst);
 
 wait_dsp:
 	mutex_lock(&inst->cvpdspbufs.lock);
@@ -324,33 +320,17 @@ wait:
 			dprintk(CVP_WARN, "Unprocessed frame %d\n",
 				frame->pkt_type);
 		mutex_unlock(&inst->frames.lock);
-		eva_cvp_dump_fence_queue(inst);
+		cvp_dump_fence_queue(inst);
 	}
 
-	if (eva_cvp_release_arp_buffers(inst))
+	if (cvp_release_arp_buffers(inst))
 		dprintk(CVP_ERR,
 			"Failed to release persist buffers\n");
-
-	if (inst->prop.type == HFI_SESSION_FD
-		|| inst->prop.type == HFI_SESSION_DMM) {
-		spin_lock(&inst->core->resources.pm_qos.lock);
-		if (inst->core->resources.pm_qos.off_vote_cnt > 0)
-			inst->core->resources.pm_qos.off_vote_cnt--;
-		else
-			dprintk(CVP_WARN, "%s Unexpected pm_qos off vote %d\n",
-				__func__,
-				inst->core->resources.pm_qos.off_vote_cnt);
-		spin_unlock(&inst->core->resources.pm_qos.lock);
-		hdev = inst->core->device;
-		call_hfi_op(hdev, pm_qos_update, hdev->hfi_device_data);
-	}
 }
 
-int eva_msm_cvp_destroy(struct msm_cvp_inst *inst)
+int cvp_msm_cvp_destroy(struct msm_cvp_inst *inst)
 {
 	struct msm_cvp_core *core;
-
-	pr_info(CVP_DBG_TAG "Closed cvp start\n","sess");
 
 	if (!inst || !inst->core) {
 		dprintk(CVP_ERR, "%s: invalid params\n", __func__);
@@ -359,7 +339,6 @@ int eva_msm_cvp_destroy(struct msm_cvp_inst *inst)
 
 	core = inst->core;
 
-	/* Ensure no path has core->clk_lock and core->lock sequence */
 	mutex_lock(&core->lock);
 	mutex_lock(&core->clk_lock);
 	/* inst->list lives in core->instances */
@@ -375,19 +354,19 @@ int eva_msm_cvp_destroy(struct msm_cvp_inst *inst)
 	mutex_destroy(&inst->sync_lock);
 	mutex_destroy(&inst->lock);
 
-	eva_msm_cvp_debugfs_deinit_inst(inst);
+	cvp_msm_cvp_debugfs_deinit_inst(inst);
 
 	__deinit_session_queue(inst);
 	__deinit_fence_queue(inst);
-	cvp_sess_deinit_synx(inst);
+	synx_uninitialize(inst->synx_session_id);
 
 	pr_info(CVP_DBG_TAG "Closed cvp instance: %pK session_id = %d\n",
 		"sess", inst, hash32_ptr(inst->session));
+	if (inst->cur_cmd_type)
+		dprintk(CVP_ERR, "deleted instance has pending cmd %d\n",
+				inst->cur_cmd_type);
 	inst->session = (void *)0xdeadbeef;
 	kfree(inst);
-
-	pr_info(CVP_DBG_TAG "Closed cvp end\n","sess");
-
 	return 0;
 }
 
@@ -396,10 +375,10 @@ static void close_helper(struct kref *kref)
 	struct msm_cvp_inst *inst = container_of(kref,
 			struct msm_cvp_inst, kref);
 
-	eva_msm_cvp_destroy(inst);
+	cvp_msm_cvp_destroy(inst);
 }
 
-int msm_cvp_close(void *instance)
+int msm_cvp_close21(void *instance)
 {
 	struct msm_cvp_inst *inst = instance;
 	int rc = 0;
@@ -411,28 +390,25 @@ int msm_cvp_close(void *instance)
 
 	if (inst->session_type != MSM_CVP_BOOT) {
 		msm_cvp_cleanup_instance(inst);
-		eva_msm_cvp_session_deinit(inst);
+		cvp_msm_cvp_session_deinit(inst);
 	}
 
-	rc = eva_msm_cvp_comm_try_state(inst, MSM_CVP_CORE_UNINIT);
+	rc = cvp_msm_cvp_comm_try_state(inst, MSM_CVP_CORE_UNINIT);
 	if (rc) {
 		dprintk(CVP_ERR,
 			"Failed to move inst %pK to uninit state\n", inst);
-		rc = eva_msm_cvp_deinit_core(inst);
+		rc = cvp_msm_cvp_deinit_core(inst);
 	}
 
-	eva_msm_cvp_comm_session_clean(inst);
-
-	if (inst->session_type == MSM_CVP_DSP)
-		cvp_dsp_del_sess(inst->process_id, inst);
+	cvp_msm_cvp_comm_session_clean(inst);
 
 	kref_put(&inst->kref, close_helper);
 	return 0;
 }
-EXPORT_SYMBOL(msm_cvp_close);
+EXPORT_SYMBOL(msm_cvp_close21);
 
-int msm_cvp_suspend(int core_id)
+int msm_cvp_suspend21(int core_id)
 {
-	return eva_msm_cvp_comm_suspend(core_id);
+	return cvp_msm_cvp_comm_suspend(core_id);
 }
-EXPORT_SYMBOL(msm_cvp_suspend);
+EXPORT_SYMBOL(msm_cvp_suspend21);
