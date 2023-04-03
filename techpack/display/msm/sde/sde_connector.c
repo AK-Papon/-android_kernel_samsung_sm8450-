@@ -982,6 +982,15 @@ static int _sde_connector_update_hdr_metadata(struct sde_connector *c_conn,
 	return rc;
 }
 
+static bool sde_connector_fod_dim_layer_status(struct sde_connector *c_conn)
+{
+	if (!c_conn->encoder || !c_conn->encoder->crtc ||
+	    !c_conn->encoder->crtc->state)
+		return false;
+
+	return !!to_sde_crtc_state(c_conn->encoder->crtc->state)->fod_dim_layer;
+}
+
 static int _sde_connector_update_dirty_properties(
 				struct drm_connector *connector)
 {
@@ -1037,6 +1046,84 @@ static int _sde_connector_update_dirty_properties(
 
 	return 0;
 }
+
+static int _sde_connector_update_finger_hbm_status(
+				struct drm_connector *connector)
+{
+        bool is_aosp;
+	bool status;
+	struct sde_connector *c_conn;
+	struct sde_connector_state *c_state;
+	struct dsi_display * display;
+
+	if (!connector) {
+		SDE_ERROR("invalid argument\n");
+		return -EINVAL;
+	}
+
+	c_conn = to_sde_connector(connector);
+	c_state = to_sde_connector_state(connector->state);
+
+	display = (struct dsi_display *) c_conn->display;
+	if (!display || !display->panel) {
+		SDE_ERROR("Invalid params(s) dsi_display %pK, panel %pK\n",
+					display, ((display) ? display->panel : NULL));
+		return -EINVAL;
+	}
+
+        is_aosp = (!c_conn->fingerlayer_dirty && !c_conn->finger_flag);
+        status = sde_connector_fod_dim_layer_status(c_conn);
+        if (is_aosp) {
+                if (status == dsi_panel_get_fod_ui(display->panel))
+                        return 0;
+        } else if (!c_conn->fingerlayer_dirty && (finger_hbm_flag == c_conn->finger_flag)) {
+                return 0;
+        }
+
+	if (display->panel->power_mode == SDE_MODE_DPMS_OFF) {
+		SDE_ERROR("panel in power off\n");
+		return 0;
+	}
+
+	SDE_ATRACE_BEGIN("_sde_connector_update_finger_hbm_statuss");
+        if (is_aosp)
+                finger_hbm_flag = status;
+        else
+                finger_hbm_flag = c_conn->finger_flag;
+	if (finger_hbm_flag) {
+		SDE_ERROR("open hbm");
+		if ((c_conn->lp_mode == SDE_MODE_DPMS_LP1) ||
+			(c_conn->lp_mode == SDE_MODE_DPMS_LP2)) {
+			mutex_lock(&c_conn->lock);
+			c_conn->ops.set_power(connector, SDE_MODE_DPMS_ON, display);
+			mutex_unlock(&c_conn->lock);
+			c_conn->last_panel_power_mode = SDE_MODE_DPMS_ON;
+		}
+		sde_backlight_device_update_status(c_conn->bl_device);
+		/*wait for VBLANK */
+		//sde_encoder_wait_for_event(c_conn->encoder, MSM_ENC_VBLANK);
+	} else {
+		SDE_ERROR("close hbm");
+		sde_backlight_device_update_status(c_conn->bl_device);
+		/*wait for VBLANK */
+		//sde_encoder_wait_for_event(c_conn->encoder, MSM_ENC_VBLANK);
+		if ((c_conn->lp_mode == SDE_MODE_DPMS_LP1) ||
+			(c_conn->lp_mode == SDE_MODE_DPMS_LP2)) {
+			mutex_lock(&c_conn->lock);
+			c_conn->ops.set_power(connector, c_conn->lp_mode, display);
+			mutex_unlock(&c_conn->lock);
+			c_conn->last_panel_power_mode = c_conn->lp_mode;
+		}
+	}
+
+        if (is_aosp)
+	        dsi_panel_set_fod_ui(display->panel, finger_hbm_flag);
+        else
+                c_conn->fingerlayer_dirty = false;
+	SDE_ATRACE_END("_sde_connector_update_finger_hbm_statuss");
+	return 0;
+}
+
 
 struct sde_connector_dyn_hdr_metadata *sde_connector_get_dyn_hdr_meta(
 		struct drm_connector *connector)
