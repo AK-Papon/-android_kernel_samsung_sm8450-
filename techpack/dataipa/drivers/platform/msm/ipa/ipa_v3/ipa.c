@@ -478,6 +478,38 @@ int ipa_smmu_free_sgt(struct sg_table **out_sgt_ptr)
 }
 EXPORT_SYMBOL(ipa_smmu_free_sgt);
 
+/**
+ * ipa_pm_notify() - PM notify to listen suspend events
+ *
+ * This callback will be invoked by the pm framework to suspend
+ * operation is invoked.
+ *
+ * Returns NOTIFY_DONE to pm framework completed operation.
+ */
+
+static int ipa_pm_notify(struct notifier_block *b, unsigned long event, void *p)
+{
+	IPADBG("Entry\n");
+	switch (event) {
+		case PM_POST_SUSPEND:
+#ifdef CONFIG_DEEPSLEEP
+			if (mem_sleep_current == PM_SUSPEND_MEM && ipa3_ctx->deepsleep) {
+				IPADBG("Enter deepsleep resume\n");
+				ipa3_deepsleep_resume();
+				IPADBG("Exit deepsleep resume\n");
+			}
+#endif
+			break;
+	}
+	IPADBG("Exit\n");
+	return NOTIFY_DONE;
+}
+
+
+static struct notifier_block ipa_pm_notifier = {
+	.notifier_call = ipa_pm_notify,
+};
+
 static const struct dev_pm_ops ipa_pm_ops = {
 	.suspend_late = ipa3_ap_suspend,
 	.resume_early = ipa3_ap_resume,
