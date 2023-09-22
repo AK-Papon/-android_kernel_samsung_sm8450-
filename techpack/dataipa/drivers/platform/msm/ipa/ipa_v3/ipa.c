@@ -4479,7 +4479,7 @@ static int ipa3_q6_clean_q6_flt_tbls(enum ipa_ip_type ip,
 	u32 lcl_hdr_sz;
 	struct ipa_mem_buffer mem;
 	struct ipahal_reg_valmask valmask;
-	struct ipahal_imm_cmd_register_write reg_write_coal_close;
+	struct ipahal_imm_cmd_register_write reg_write_coal_close = { 0 };
 	int coal_ep = IPA_EP_NOT_ALLOCATED;
 
 	IPADBG("Entry\n");
@@ -4644,7 +4644,7 @@ static int ipa3_q6_clean_q6_rt_tbls(enum ipa_ip_type ip,
 	u32 lcl_hdr_sz;
 	struct ipa_mem_buffer mem;
 	struct ipahal_reg_valmask valmask;
-	struct ipahal_imm_cmd_register_write reg_write_coal_close;
+	struct ipahal_imm_cmd_register_write reg_write_coal_close = { 0 };
 	int i;
 
 	IPADBG("Entry\n");
@@ -4779,7 +4779,7 @@ static int ipa3_q6_clean_q6_tables(void)
 	int retval = 0;
 	int num_cmds = 0;
 	struct ipahal_reg_valmask valmask;
-	struct ipahal_imm_cmd_register_write reg_write_coal_close;
+	struct ipahal_imm_cmd_register_write reg_write_coal_close = { 0 };
 	int i;
 
 	IPADBG("Entry\n");
@@ -4925,11 +4925,11 @@ static int ipa3_q6_set_ex_path_to_apps(void)
 	struct ipa3_desc *desc;
 	int num_descs = 0;
 	int index;
-	struct ipahal_imm_cmd_register_write reg_write;
+	struct ipahal_imm_cmd_register_write reg_write = { 0 };
 	struct ipahal_imm_cmd_pyld *cmd_pyld;
 	int retval;
 	struct ipahal_reg_valmask valmask;
-	struct ipahal_imm_cmd_register_write reg_write_coal_close;
+	struct ipahal_imm_cmd_register_write reg_write_coal_close = { 0 };
 	int i;
 
 	desc = kcalloc(ipa3_ctx->ipa_num_pipes + 1, sizeof(struct ipa3_desc),
@@ -5361,7 +5361,7 @@ int _ipa_init_hdr_v3_0(void)
 	struct ipahal_imm_cmd_pyld *cmd_pyld[2];
 	struct ipahal_imm_cmd_dma_shared_mem dma_cmd = { 0 };
 	struct ipahal_reg_valmask valmask;
-	struct ipahal_imm_cmd_register_write reg_write_coal_close;
+	struct ipahal_imm_cmd_register_write reg_write_coal_close = { 0 };
 	int num_cmds = 0;
 	int i;
 
