@@ -34,20 +34,20 @@
 
 #ifdef CVP_MINIDUMP_ENABLED
 /*
-    Declare and init the head node of the linked list
-    for queue va_md dump
+	Declare and init the head node of the linked list
+	for queue va_md dump
 */
 static LIST_HEAD(head_node_hfi_queue);
 
 /*
-    Declare and init the head node of the linked list
-    for debug struct va_md dump
+	Declare and init the head node of the linked list
+	for debug struct va_md dump
 */
 static LIST_HEAD(head_node_dbg_struct);
 
 /*
-    Declare and init the head node of the linked list
-    for static dumps
+	Declare and init the head node of the linked list
+	for static dumps
 */
 static LIST_HEAD(head_node_static_dump);
 
