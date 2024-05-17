@@ -1782,6 +1782,7 @@ static int ext4_da_map_blocks(struct inode *inode, sector_t iblock,
 			goto add_delayed;
 		}
 
+found:
 		/*
 		 * Delayed extent could be allocated by fallocate.
 		 * So we need to check it.
@@ -1824,8 +1825,32 @@ static int ext4_da_map_blocks(struct inode *inode, sector_t iblock,
 	if (retval)
 		return retval;
 
-out_unlock:
-	up_read((&EXT4_I(inode)->i_data_sem));
+add_delayed:
+	down_write(&EXT4_I(inode)->i_data_sem);
+	/*
+	 * Page fault path (ext4_page_mkwrite does not take i_rwsem)
+	 * and fallocate path (no folio lock) can race. Make sure we
+	 * lookup the extent status tree here again while i_data_sem
+	 * is held in write mode, before inserting a new da entry in
+	 * the extent status tree.
+	 */
+	if (ext4_es_lookup_extent(inode, iblock, NULL, &es)) {
+		if (!ext4_es_is_hole(&es)) {
+			up_write(&EXT4_I(inode)->i_data_sem);
+			goto found;
+		}
+	} else if (!ext4_has_inline_data(inode)) {
+		retval = ext4_map_query_blocks(NULL, inode, map);
+		if (retval) {
+			up_write(&EXT4_I(inode)->i_data_sem);
+			return retval;
+		}
+	}
+
+	retval = ext4_insert_delayed_block(inode, map->m_lblk);
+	up_write(&EXT4_I(inode)->i_data_sem);
+	if (retval)
+		return retval;
 
 	return retval;
 }
