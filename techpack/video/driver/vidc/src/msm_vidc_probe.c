@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
+ * Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
  * Copyright (c) 2020-2022, The Linux Foundation. All rights reserved.
  */
 
@@ -9,6 +10,7 @@
 #include <linux/of.h>
 #include <linux/of_platform.h>
 #include <linux/interrupt.h>
+#include <linux/suspend.h>
 
 #include "msm_vidc_internal.h"
 #include "msm_vidc_debug.h"
@@ -16,6 +18,7 @@
 #include "msm_vidc_dt.h"
 #include "msm_vidc_platform.h"
 #include "msm_vidc_core.h"
+#include "msm_vidc_memory.h"
 #include "venus_hfi.h"
 
 #define BASE_DEVICE_NUMBER 32
@@ -196,6 +199,7 @@ static int msm_vidc_register_video_device(struct msm_vidc_core *core,
 	return 0;
 }
 
+#ifdef CONFIG_MSM_MMRM
 static int msm_vidc_check_mmrm_support(struct msm_vidc_core *core)
 {
 	int rc = 0;
@@ -217,6 +221,12 @@ exit:
 	d_vpr_h("%s: %d\n", __func__, core->capabilities[MMRM].value);
 	return rc;
 }
+#else
+static int msm_vidc_check_mmrm_support(struct msm_vidc_core *core)
+{
+	return 0;
+}
+#endif
 
 static int msm_vidc_deinitialize_core(struct msm_vidc_core *core)
 {
@@ -231,8 +241,8 @@ static int msm_vidc_deinitialize_core(struct msm_vidc_core *core)
 	mutex_destroy(&core->lock);
 	msm_vidc_change_core_state(core, MSM_VIDC_CORE_DEINIT, __func__);
 
-	kfree(core->response_packet);
-	kfree(core->packet);
+	msm_vidc_vmem_free((void **)&core->response_packet);
+	msm_vidc_vmem_free((void **)&core->packet);
 	core->response_packet = NULL;
 	core->packet = NULL;
 
@@ -275,20 +285,15 @@ static int msm_vidc_initialize_core(struct msm_vidc_core *core)
 	}
 
 	core->packet_size = 4096;
-	core->packet = kzalloc(core->packet_size, GFP_KERNEL);
-	if (!core->packet) {
-		d_vpr_e("%s(): core packet allocation failed\n", __func__);
-		rc = -ENOMEM;
+	rc = msm_vidc_vmem_alloc(core->packet_size,
+			(void **)&core->packet, "core packet");
+	if (rc)
 		goto exit;
-	}
 
-	core->response_packet = kzalloc(core->packet_size, GFP_KERNEL);
-	if (!core->response_packet) {
-		d_vpr_e("%s(): core response packet allocation failed\n",
-			__func__);
-		rc = -ENOMEM;
+	rc = msm_vidc_vmem_alloc(core->packet_size,
+			(void **)&core->response_packet, "core response packet");
+	if (rc)
 		goto exit;
-	}
 
 	mutex_init(&core->lock);
 	init_completion(&core->init_done);
@@ -301,8 +306,8 @@ static int msm_vidc_initialize_core(struct msm_vidc_core *core)
 
 	return 0;
 exit:
-	kfree(core->response_packet);
-	kfree(core->packet);
+	msm_vidc_vmem_free((void **)&core->response_packet);
+	msm_vidc_vmem_free((void **)&core->packet);
 	core->response_packet = NULL;
 	core->packet = NULL;
 	if (core->batch_workq)
@@ -333,6 +338,8 @@ static int msm_vidc_remove(struct platform_device* pdev)
 
 	msm_vidc_core_deinit(core, true);
 
+	venus_hfi_interface_queues_deinit(core);
+
 	msm_vidc_unregister_video_device(core, MSM_VIDC_ENCODER);
 	msm_vidc_unregister_video_device(core, MSM_VIDC_DECODER);
 	//device_remove_file(&core->vdev[MSM_VIDC_ENCODER].vdev.dev,
@@ -351,8 +358,10 @@ static int msm_vidc_remove(struct platform_device* pdev)
 	msm_vidc_deinitialize_core(core);
 
 	dev_set_drvdata(&pdev->dev, NULL);
+#ifdef CONFIG_DEBUG_FS
 	debugfs_remove_recursive(core->debugfs_parent);
-	kfree(core);
+#endif
+	msm_vidc_vmem_free((void **)&core);
 	g_core = NULL;
 
 	return 0;
@@ -361,19 +370,21 @@ static int msm_vidc_remove(struct platform_device* pdev)
 static int msm_vidc_probe_video_device(struct platform_device *pdev)
 {
 	int rc = 0;
-	struct msm_vidc_core *core;
+	struct msm_vidc_core *core = NULL;
 	int nr = BASE_DEVICE_NUMBER;
 
 	d_vpr_h("%s()\n", __func__);
 
-	core = kzalloc(sizeof(*core), GFP_KERNEL);
-	if (!core)
-		return -ENOMEM;
+	rc = msm_vidc_vmem_alloc(sizeof(*core), (void **)&core, __func__);
+	if (rc)
+		return rc;
 	g_core = core;
 
+#ifdef CONFIG_DEBUG_FS
 	core->debugfs_parent = msm_vidc_debugfs_init_drv();
 	if (!core->debugfs_parent)
 		d_vpr_h("Failed to create debugfs for msm_vidc\n");
+#endif
 
 	core->pdev = pdev;
 	dev_set_drvdata(&pdev->dev, core);
@@ -448,9 +459,11 @@ static int msm_vidc_probe_video_device(struct platform_device *pdev)
 		rc = 0; /* Ignore error */
 	}
 
+#ifdef CONFIG_DEBUG_FS
 	core->debugfs_root = msm_vidc_debugfs_init_core(core);
 	if (!core->debugfs_root)
 		d_vpr_h("Failed to init debugfs core\n");
+#endif
 
 	d_vpr_h("populating sub devices\n");
 	/*
@@ -490,8 +503,10 @@ init_dt_failed:
 	msm_vidc_deinitialize_core(core);
 init_core_failed:
 	dev_set_drvdata(&pdev->dev, NULL);
+#ifdef CONFIG_DEBUG_FS
 	debugfs_remove_recursive(core->debugfs_parent);
-	kfree(core);
+#endif
+	msm_vidc_vmem_free((void **)&core);
 	g_core = NULL;
 
 	return rc;
@@ -547,7 +562,16 @@ static int msm_vidc_pm_suspend(struct device *dev)
 	}
 
 	d_vpr_h("%s\n", __func__);
+#ifdef CONFIG_DEEPSLEEP
+	if (pm_suspend_via_firmware()) {
+		d_vpr_l("%s : deepsleep is triggered\n", __func__);
+		rc = msm_vidc_schedule_core_deinit(core, true);
+	} else {
+		rc = msm_vidc_suspend(core);
+	}
+#else
 	rc = msm_vidc_suspend(core);
+#endif
 	if (rc == -ENOTSUPP)
 		rc = 0;
 	else if (rc)
@@ -583,8 +607,52 @@ static int msm_vidc_pm_resume(struct device *dev)
 	return 0;
 }
 
+#if defined(CONFIG_HIBERNATION) && defined(CONFIG_MSM_VIDC_NEO)
+static int msm_vidc_pm_freeze(struct device *dev)
+{
+	int rc = 0;
+	struct msm_vidc_core *core;
+
+	/*
+	 * Bail out if
+	 * - driver possibly not probed yet
+	 * - not the main device. We don't support power management on
+	 *   subdevices (e.g. context banks)
+	 */
+	if (!dev || !dev->driver ||
+		!of_device_is_compatible(dev->of_node, "qcom,msm-vidc"))
+		return 0;
+
+	core = dev_get_drvdata(dev);
+	if (!core) {
+		d_vpr_e("%s: invalid core\n", __func__);
+		return -EINVAL;
+	}
+
+	d_vpr_h("%s\n", __func__);
+
+	rc = msm_vidc_schedule_core_deinit(core, true);
+
+	if (rc == -ENOTSUPP)
+		rc = 0;
+	else if (rc)
+		d_vpr_e("Failed to freeze: %d\n", rc);
+
+	return rc;
+}
+
+static int msm_vidc_pm_restore(struct device *dev) {
+	d_vpr_h("%s\n", __func__);
+	return 0;
+}
+#endif
+
 static const struct dev_pm_ops msm_vidc_pm_ops = {
 	SET_SYSTEM_SLEEP_PM_OPS(msm_vidc_pm_suspend, msm_vidc_pm_resume)
+#if defined(CONFIG_HIBERNATION) && defined(CONFIG_MSM_VIDC_NEO)
+	.freeze = msm_vidc_pm_freeze,
+	.restore = msm_vidc_pm_restore
+#endif
 };
 
 struct platform_driver msm_vidc_driver = {
