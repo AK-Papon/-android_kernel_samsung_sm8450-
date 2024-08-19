@@ -836,11 +836,6 @@ struct rc_dev *rc_dev_get_from_fd(int fd)
 		return ERR_PTR(-EINVAL);
 	}
 
-	if (write && !(f.file->f_mode & FMODE_WRITE)) {
-		fdput(f);
-		return ERR_PTR(-EPERM);
-	}
-
 	fh = f.file->private_data;
 	dev = fh->rc;
 
