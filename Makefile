@@ -710,7 +710,7 @@ RETPOLINE_CFLAGS	:= -mretpoline-external-thunk
 RETPOLINE_VDSO_CFLAGS	:= -mretpoline
 
 # Set O3 optimization level for LTO
-LDFLAGS		+= --plugin-opt=O3
+KBUILD_LDFLAGS		+= --plugin-opt=O3
 endif
 
 ifdef CONFIG_RETHUNK
@@ -832,7 +832,7 @@ endif
 KBUILD_CFLAGS += $(call cc-disable-warning, unused-but-set-variable)
 
 ifeq ($(ld-name),lld)
-LDFLAGS += --lto-O3
+KBUILD_LDFLAGS += --lto-O3
 endif
 
 KBUILD_CFLAGS += $(call cc-disable-warning, unused-const-variable)
