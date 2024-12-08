@@ -79,6 +79,7 @@
 #include "cpudeadline.h"
 
 #include <trace/events/sched.h>
+#include <trace/hooks/sched.h>
 
 #ifdef CONFIG_SCHED_DEBUG
 # define SCHED_WARN_ON(x)	WARN_ONCE(x, #x)
@@ -1192,7 +1193,6 @@ static inline u64 rq_clock_task(struct rq *rq)
 	return rq->clock_task;
 }
 
-#ifdef CONFIG_SMP
 DECLARE_PER_CPU(u64, clock_task_mult);
 
 static inline u64 rq_clock_task_mult(struct rq *rq)
@@ -1202,12 +1202,6 @@ static inline u64 rq_clock_task_mult(struct rq *rq)
 
 	return per_cpu(clock_task_mult, cpu_of(rq));
 }
-#else
-static inline u64 rq_clock_task_mult(struct rq *rq)
-{
-	return rq_clock_task(rq);
-}
-#endif
 
 /**
  * By default the decay is the default pelt decay period.
@@ -1993,7 +1987,7 @@ extern void init_sched_dl_class(void);
 extern void init_sched_rt_class(void);
 extern void init_sched_fair_class(void);
 
-extern void reweight_task(struct task_struct *p, const struct load_weight *lw);
+extern void reweight_task(struct task_struct *p, int prio);
 
 extern void resched_curr(struct rq *rq);
 extern void resched_cpu(int cpu);
@@ -2498,6 +2492,7 @@ unsigned long uclamp_rq_util_with(struct rq *rq, unsigned long util,
 {
 	unsigned long min_util = 0;
 	unsigned long max_util = 0;
+	unsigned long ret = 0;
 
 	if (!static_branch_likely(&sched_uclamp_used))
 		return util;
@@ -2524,6 +2519,10 @@ out:
 	 */
 	if (unlikely(min_util >= max_util))
 		return min_util;
+
+	trace_android_rvh_uclamp_rq_util_with(util, min_util, max_util, &ret);
+	if (ret)
+		return ret;
 
 	return clamp(util, min_util, max_util);
 }

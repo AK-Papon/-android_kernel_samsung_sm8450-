@@ -78,9 +78,6 @@
 
 #include <trace/events/kmem.h>
 
-#undef CREATE_TRACE_POINTS
-#include <trace/hooks/mm.h>
-
 #include <asm/io.h>
 #include <asm/mmu_context.h>
 #include <asm/pgalloc.h>
@@ -90,7 +87,6 @@
 
 #include "pgalloc-track.h"
 #include "internal.h"
-#include <trace/hooks/mm.h>
 
 #define CREATE_TRACE_POINTS
 #include <trace/events/pagefault.h>
@@ -131,18 +127,6 @@ int randomize_va_space __read_mostly =
 					2;
 #endif
 
-#ifndef arch_faults_on_old_pte
-static inline bool arch_faults_on_old_pte(void)
-{
-	/*
-	 * Those arches which don't have hw access flag feature need to
-	 * implement their own helper. By default, "true" means pagefault
-	 * will be hit on old pte.
-	 */
-	return true;
-}
-#endif
-
 #ifndef arch_wants_old_prefaulted_pte
 static inline bool arch_wants_old_prefaulted_pte(void)
 {
@@ -177,21 +161,9 @@ static int __init init_zero_pfn(void)
 }
 early_initcall(init_zero_pfn);
 
-/*
- * Only trace rss_stat when there is a 512kb cross over.
- * Smaller changes may be lost unless every small change is
- * crossing into or returning to a 512kb boundary.
- */
-#define TRACE_MM_COUNTER_THRESHOLD 128
-
-void mm_trace_rss_stat(struct mm_struct *mm, int member, long count,
-		       long value)
+void mm_trace_rss_stat(struct mm_struct *mm, int member, long count)
 {
-	long thresh_mask = ~(TRACE_MM_COUNTER_THRESHOLD - 1);
-
-	/* Threshold roll-over, trace it */
-	if ((count & thresh_mask) != ((count - value) & thresh_mask))
-		trace_rss_stat(mm, member, count);
+	trace_rss_stat(mm, member, count);
 }
 EXPORT_SYMBOL_GPL(mm_trace_rss_stat);
 
@@ -1291,15 +1263,18 @@ static unsigned long zap_pte_range(struct mmu_gather *tlb,
 	pte_t *start_pte;
 	pte_t *pte;
 	swp_entry_t entry;
+	int v_ret = 0;
 
 	tlb_change_page_size(tlb, PAGE_SIZE);
 again:
+	trace_android_vh_zap_pte_range_tlb_start(&v_ret);
 	init_rss_vec(rss);
 	start_pte = pte_offset_map_lock(mm, pmd, addr, &ptl);
 	pte = start_pte;
 	flush_tlb_batched_pending(mm);
 	arch_enter_lazy_mmu_mode();
 	do {
+		bool flush = false;
 		pte_t ptent = *pte;
 		if (pte_none(ptent))
 			continue;
@@ -1340,8 +1315,9 @@ again:
 			page_remove_rmap(page, false);
 			if (unlikely(page_mapcount(page) < 0))
 				print_bad_pte(vma, addr, ptent, page);
+			trace_android_vh_zap_pte_range_tlb_force_flush(page, &flush);
 			if (unlikely(__tlb_remove_page(tlb, page)) ||
-				     lru_cache_disabled()) {
+				     lru_cache_disabled() || flush) {
 				force_flush = 1;
 				addr += PAGE_SIZE;
 				break;
@@ -1409,6 +1385,7 @@ again:
 		tlb_flush_mmu(tlb);
 	}
 
+	trace_android_vh_zap_pte_range_tlb_end(&v_ret);
 	if (addr != end) {
 		cond_resched();
 		goto again;
@@ -2345,13 +2322,26 @@ static inline int remap_p4d_range(struct mm_struct *mm, pgd_t *pgd,
 	return 0;
 }
 
-static int remap_pfn_range_internal(struct vm_area_struct *vma, unsigned long addr,
-		unsigned long pfn, unsigned long size, pgprot_t prot)
+/**
+ * remap_pfn_range - remap kernel memory to userspace
+ * @vma: user vma to map to
+ * @addr: target page aligned user address to start at
+ * @pfn: page frame number of kernel physical memory address
+ * @size: size of mapping area
+ * @prot: page protection flags for this mapping
+ *
+ * Note: this is only safe if the mm semaphore is held when called.
+ *
+ * Return: %0 on success, negative error code otherwise.
+ */
+int remap_pfn_range(struct vm_area_struct *vma, unsigned long addr,
+		    unsigned long pfn, unsigned long size, pgprot_t prot)
 {
 	pgd_t *pgd;
 	unsigned long next;
 	unsigned long end = addr + PAGE_ALIGN(size);
 	struct mm_struct *mm = vma->vm_mm;
+	unsigned long remap_pfn = pfn;
 	int err;
 
 	if (WARN_ON_ONCE(!PAGE_ALIGNED(addr)))
@@ -2381,6 +2371,10 @@ static int remap_pfn_range_internal(struct vm_area_struct *vma, unsigned long ad
 		vma->vm_pgoff = pfn;
 	}
 
+	err = track_pfn_remap(vma, &prot, remap_pfn, addr, PAGE_ALIGN(size));
+	if (err)
+		return -EINVAL;
+
 	vma->vm_flags |= VM_IO | VM_PFNMAP | VM_DONTEXPAND | VM_DONTDUMP;
 
 	BUG_ON(addr >= end);
@@ -2392,57 +2386,12 @@ static int remap_pfn_range_internal(struct vm_area_struct *vma, unsigned long ad
 		err = remap_p4d_range(mm, pgd, addr, next,
 				pfn + (addr >> PAGE_SHIFT), prot);
 		if (err)
-			return err;
+			break;
 	} while (pgd++, addr = next, addr != end);
 
-	return 0;
-}
-
-/*
- * Variant of remap_pfn_range that does not call track_pfn_remap.  The caller
- * must have pre-validated the caching bits of the pgprot_t.
- */
-int remap_pfn_range_notrack(struct vm_area_struct *vma, unsigned long addr,
-		unsigned long pfn, unsigned long size, pgprot_t prot)
-{
-	int error = remap_pfn_range_internal(vma, addr, pfn, size, prot);
-
-	if (!error)
-		return 0;
-
-	/*
-	 * A partial pfn range mapping is dangerous: it does not
-	 * maintain page reference counts, and callers may free
-	 * pages due to the error. So zap it early.
-	 */
-	zap_page_range_single(vma, addr, size, NULL);
-	return error;
-}
-
-/**
- * remap_pfn_range - remap kernel memory to userspace
- * @vma: user vma to map to
- * @addr: target page aligned user address to start at
- * @pfn: page frame number of kernel physical memory address
- * @size: size of mapping area
- * @prot: page protection flags for this mapping
- *
- * Note: this is only safe if the mm semaphore is held when called.
- *
- * Return: %0 on success, negative error code otherwise.
- */
-int remap_pfn_range(struct vm_area_struct *vma, unsigned long addr,
-		    unsigned long pfn, unsigned long size, pgprot_t prot)
-{
-	int err;
-
-	err = track_pfn_remap(vma, &prot, pfn, addr, PAGE_ALIGN(size));
 	if (err)
-		return -EINVAL;
+		untrack_pfn(vma, remap_pfn, PAGE_ALIGN(size));
 
-	err = remap_pfn_range_notrack(vma, addr, pfn, size, prot);
-	if (err)
-		untrack_pfn(vma, pfn, PAGE_ALIGN(size));
 	return err;
 }
 EXPORT_SYMBOL(remap_pfn_range);
@@ -2959,7 +2908,7 @@ static inline bool cow_user_page(struct page *dst, struct page *src,
 	 * On architectures with software "accessed" bits, we would
 	 * take a double page fault, so mark it accessed here.
 	 */
-	if (arch_faults_on_old_pte() && !pte_young(vmf->orig_pte)) {
+	if (!arch_has_hw_pte_young() && !pte_young(vmf->orig_pte)) {
 		pte_t entry;
 
 		vmf->pte = pte_offset_map_lock(mm, vmf->pmd, addr, &vmf->ptl);
@@ -3208,7 +3157,6 @@ static vm_fault_t wp_page_copy(struct vm_fault *vmf)
 				put_page(old_page);
 			return 0;
 		}
-		trace_android_vh_cow_user_page(vmf, new_page);
 	}
 
 	if (mem_cgroup_charge(new_page, mm, GFP_KERNEL))
@@ -3475,7 +3423,6 @@ static vm_fault_t do_wp_page(struct vm_fault *vmf)
 	 * Take out anonymous pages first, anonymous shared vmas are
 	 * not dirty accountable.
 	 */
-	trace_android_vh_do_wp_page(vmf->page);
 	if (PageAnon(vmf->page)) {
 		struct page *page = vmf->page;
 
@@ -3708,13 +3655,11 @@ vm_fault_t do_swap_page(struct vm_fault *vmf)
 
 	if (!page) {
 		struct swap_info_struct *si = swp_swap_info(entry);
-		bool skip_swapcache = false;
 
-		trace_android_vh_skip_swapcache(entry, &skip_swapcache);
-		if ((data_race(si->flags & SWP_SYNCHRONOUS_IO) || skip_swapcache) &&
+		if (data_race(si->flags & SWP_SYNCHRONOUS_IO) &&
 		    __swap_count(entry) == 1) {
 			/* skip swapcache */
-			gfp_t flags = GFP_HIGHUSER_MOVABLE;
+			gfp_t flags = GFP_HIGHUSER_MOVABLE | __GFP_CMA;
 
 			trace_android_rvh_set_skip_swapcache_flags(&flags);
 			page = alloc_page_vma(flags, vma, vmf->address);
@@ -3754,7 +3699,7 @@ vm_fault_t do_swap_page(struct vm_fault *vmf)
 			ret = VM_FAULT_RETRY;
 			goto out;
 		} else {
-			page = swapin_readahead(entry, GFP_HIGHUSER_MOVABLE,
+			page = swapin_readahead(entry, GFP_HIGHUSER_MOVABLE | __GFP_CMA,
 						vmf);
 			swapcache = page;
 		}
@@ -3847,7 +3792,6 @@ vm_fault_t do_swap_page(struct vm_fault *vmf)
 	inc_mm_counter_fast(vma->vm_mm, MM_ANONPAGES);
 	dec_mm_counter_fast(vma->vm_mm, MM_SWAPENTS);
 	pte = mk_pte(page, vmf->vma_page_prot);
-	trace_android_vh_do_swap_page(page, &pte, vmf, entry);
 	if ((vmf->flags & FAULT_FLAG_WRITE) && reuse_swap_page(page, NULL)) {
 		pte = maybe_mkwrite(pte_mkdirty(pte), vmf->vma_flags);
 		vmf->flags &= ~FAULT_FLAG_WRITE;
@@ -3873,7 +3817,6 @@ vm_fault_t do_swap_page(struct vm_fault *vmf)
 		do_page_add_anon_rmap(page, vma, vmf->address, exclusive);
 	}
 
-	trace_android_vh_swapin_add_anon_rmap(vmf, page);
 	swap_free(entry);
 	if (mem_cgroup_swap_full(page) ||
 	    (vmf->vma_flags & VM_LOCKED) || PageMlocked(page))
@@ -4004,7 +3947,6 @@ skip_pmd_checks:
 	 */
 	__SetPageUptodate(page);
 
-	trace_android_vh_do_anonymous_page(vma, page);
 	entry = mk_pte(page, vmf->vma_page_prot);
 	entry = pte_sw_mkyoung(entry);
 	if (vmf->vma_flags & VM_WRITE)
@@ -4412,8 +4354,6 @@ static vm_fault_t do_read_fault(struct vm_fault *vmf)
 {
 	struct vm_area_struct *vma = vmf->vma;
 	vm_fault_t ret = 0;
-
-	trace_android_vh_tune_fault_around_bytes(&fault_around_bytes);
 
 	/*
 	 * Let's call ->map_pages() first and use ->fault() as fallback
@@ -4871,8 +4811,6 @@ skip_pmd_checks:
 		if (vmf->flags & FAULT_FLAG_WRITE)
 			flush_tlb_fix_spurious_fault(vmf->vma, vmf->address);
 	}
-	trace_android_rvh_handle_pte_fault_end(vmf, highest_memmap_pfn);
-	trace_android_vh_handle_pte_fault_end(vmf, highest_memmap_pfn);
 unlock:
 	pte_unmap_unlock(vmf->pte, vmf->ptl);
 	return ret;
@@ -5038,6 +4976,10 @@ static inline void mm_account_fault(struct pt_regs *regs,
 	else
 		perf_sw_event(PERF_COUNT_SW_PAGE_FAULTS_MIN, 1, regs, address);
 }
+
+static void lru_gen_enter_fault(struct vm_area_struct *vma);
+static void lru_gen_exit_fault(void);
+
 #ifdef CONFIG_SPECULATIVE_PAGE_FAULT
 
 #ifndef CONFIG_ARCH_HAS_PTE_SPECIAL
@@ -5092,7 +5034,6 @@ static vm_fault_t ___handle_speculative_fault(struct mm_struct *mm,
 
 	vmf.vma_flags = READ_ONCE(vmf.vma->vm_flags);
 	vmf.vma_page_prot = READ_ONCE(vmf.vma->vm_page_prot);
-	vmf.sequence = seq;
 
 #ifdef CONFIG_USERFAULTFD
 	/*
@@ -5102,7 +5043,7 @@ static vm_fault_t ___handle_speculative_fault(struct mm_struct *mm,
 	if (unlikely(vmf.vma_flags & __VM_UFFD_FLAGS)) {
 		uffd_missing_sigbus = vma_is_anonymous(vmf.vma) &&
 					(vmf.vma_flags & VM_UFFD_MISSING) &&
-					userfaultfd_using_sigbus(&vmf);
+					userfaultfd_using_sigbus(vmf.vma);
 		if (!uffd_missing_sigbus) {
 			trace_spf_vma_notsup(_RET_IP_, vmf.vma, address);
 			return VM_FAULT_RETRY;
@@ -5228,6 +5169,7 @@ static vm_fault_t ___handle_speculative_fault(struct mm_struct *mm,
 		vmf.pte = NULL;
 	}
 
+	vmf.sequence = seq;
 	vmf.flags = flags;
 
 	local_irq_enable();
@@ -5245,7 +5187,9 @@ static vm_fault_t ___handle_speculative_fault(struct mm_struct *mm,
 	}
 
 	mem_cgroup_enter_user_fault();
+	lru_gen_enter_fault(vmf.vma);
 	ret = handle_pte_fault(&vmf);
+	lru_gen_exit_fault();
 	mem_cgroup_exit_user_fault();
 
 	if (ret != VM_FAULT_RETRY) {
@@ -5326,6 +5270,27 @@ bool can_reuse_spf_vma(struct vm_area_struct *vma, unsigned long address)
 }
 #endif /* CONFIG_SPECULATIVE_PAGE_FAULT */
 
+#ifdef CONFIG_LRU_GEN
+static void lru_gen_enter_fault(struct vm_area_struct *vma)
+{
+	/* the LRU algorithm doesn't apply to sequential or random reads */
+	current->in_lru_fault = !(vma->vm_flags & (VM_SEQ_READ | VM_RAND_READ));
+}
+
+static void lru_gen_exit_fault(void)
+{
+	current->in_lru_fault = false;
+}
+#else
+static void lru_gen_enter_fault(struct vm_area_struct *vma)
+{
+}
+
+static void lru_gen_exit_fault(void)
+{
+}
+#endif /* CONFIG_LRU_GEN */
+
 /*
  * By the time we get here, we already hold the mm semaphore
  *
@@ -5357,10 +5322,14 @@ vm_fault_t handle_mm_fault(struct vm_area_struct *vma, unsigned long address,
 	if (flags & FAULT_FLAG_USER)
 		mem_cgroup_enter_user_fault();
 
+	lru_gen_enter_fault(vma);
+
 	if (unlikely(is_vm_hugetlb_page(vma)))
 		ret = hugetlb_fault(vma->vm_mm, vma, address, flags);
 	else
 		ret = __handle_mm_fault(vma, address, flags);
+
+	lru_gen_exit_fault();
 
 	if (flags & FAULT_FLAG_USER) {
 		mem_cgroup_exit_user_fault();
@@ -5595,10 +5564,6 @@ int follow_phys(struct vm_area_struct *vma,
 		goto out;
 	pte = *ptep;
 
-	/* Never return PFNs of anon folios in COW mappings. */
-	if (vm_normal_page(vma, address, pte))
-		goto unlock;
-
 	if ((flags & FOLL_WRITE) && !pte_write(pte))
 		goto unlock;
 
@@ -5694,7 +5659,7 @@ int __access_remote_vm(struct task_struct *tsk, struct mm_struct *mm,
 						    buf, maddr + offset, bytes);
 			}
 			kunmap(page);
-			put_user_page(page);
+			put_page(page);
 		}
 		len -= bytes;
 		buf += bytes;

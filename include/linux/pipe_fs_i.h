@@ -48,6 +48,7 @@ struct pipe_buffer {
  *	@files: number of struct file referring this pipe (protected by ->i_lock)
  *	@r_counter: reader counter
  *	@w_counter: writer counter
+ *	@poll_usage: is this pipe used for epoll, which has crazy wakeups?
  *	@fasync_readers: reader side fasync
  *	@fasync_writers: writer side fasync
  *	@bufs: the circular array of pipe buffers
@@ -70,6 +71,7 @@ struct pipe_inode_info {
 	unsigned int files;
 	unsigned int r_counter;
 	unsigned int w_counter;
+	unsigned int poll_usage;
 	struct page *tmp_page;
 	struct fasync_struct *fasync_readers;
 	struct fasync_struct *fasync_writers;
@@ -121,22 +123,6 @@ struct pipe_buf_operations {
 	 */
 	bool (*get)(struct pipe_inode_info *, struct pipe_buffer *);
 };
-
-/**
- * pipe_has_watch_queue - Check whether the pipe is a watch_queue,
- * i.e. it was created with O_NOTIFICATION_PIPE
- * @pipe: The pipe to check
- *
- * Return: true if pipe is a watch queue, false otherwise.
- */
-static inline bool pipe_has_watch_queue(const struct pipe_inode_info *pipe)
-{
-#ifdef CONFIG_WATCH_QUEUE
-	return pipe->watch_queue != NULL;
-#else
-	return false;
-#endif
-}
 
 /**
  * pipe_empty - Return true if the pipe is empty

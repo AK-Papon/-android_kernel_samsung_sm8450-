@@ -150,7 +150,6 @@ int exfat_free_cluster(struct inode *inode, struct exfat_chain *p_chain)
 	unsigned int clu;
 	struct super_block *sb = inode->i_sb;
 	struct exfat_sb_info *sbi = EXFAT_SB(sb);
-	int cur_cmap_i, next_cmap_i;
 
 	/* invalid cluster number */
 	if (p_chain->dir == EXFAT_FREE_CLUSTER ||
@@ -170,53 +169,21 @@ int exfat_free_cluster(struct inode *inode, struct exfat_chain *p_chain)
 
 	clu = p_chain->dir;
 
-	cur_cmap_i = next_cmap_i =
-			BITMAP_OFFSET_SECTOR_INDEX(sb, CLUSTER_TO_BITMAP_ENT(clu));
-
 	if (p_chain->flags == ALLOC_NO_FAT_CHAIN) {
-		unsigned int last_cluster = p_chain->dir + p_chain->size - 1;
-
 		do {
-			bool sync = false;
-
-			if (clu < last_cluster)
-				next_cmap_i =
-				  BITMAP_OFFSET_SECTOR_INDEX(sb, CLUSTER_TO_BITMAP_ENT(clu+1));
-
-			/* flush bitmap only if index would be changed or for last cluster */
-			if (clu == last_cluster || cur_cmap_i != next_cmap_i) {
-				sync = true;
-				cur_cmap_i = next_cmap_i;
-			}
-
-			exfat_clear_bitmap(inode, clu, (sync && IS_DIRSYNC(inode)));
+			exfat_clear_bitmap(inode, clu);
 			clu++;
+
 			num_clusters++;
 		} while (num_clusters < p_chain->size);
 	} else {
 		do {
-			bool sync = false;
-			unsigned int n_clu = clu;
-			int err = exfat_get_next_cluster(sb, &n_clu);
+			exfat_clear_bitmap(inode, clu);
 
-			if (err || n_clu == EXFAT_EOF_CLUSTER)
-				sync = true;
-			else
-				next_cmap_i =
-				  BITMAP_OFFSET_SECTOR_INDEX(sb, CLUSTER_TO_BITMAP_ENT(n_clu));
-
-			if (cur_cmap_i != next_cmap_i) {
-				sync = true;
-				cur_cmap_i = next_cmap_i;
-			}
-
-			exfat_clear_bitmap(inode, clu, (sync && IS_DIRSYNC(inode)));
-			clu = n_clu;
+			if (exfat_get_next_cluster(sb, &clu))
+				goto dec_used_clus;
 
 			num_clusters++;
-
-			if (err)
-				goto dec_used_clus;
 		} while (clu != EXFAT_EOF_CLUSTER);
 	}
 
@@ -261,8 +228,7 @@ int exfat_zeroed_cluster(struct inode *dir, unsigned int clu)
 	struct exfat_sb_info *sbi = EXFAT_SB(sb);
 	struct buffer_head *bh;
 	struct address_space *mapping = sb->s_bdev->bd_inode->i_mapping;
-	sector_t blknr, last_blknr;
-	int i;
+	sector_t blknr, last_blknr, i;
 
 	blknr = exfat_cluster_to_sector(sbi, clu);
 	last_blknr = blknr + sbi->sect_per_clus;

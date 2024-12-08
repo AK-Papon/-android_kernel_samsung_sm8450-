@@ -232,7 +232,7 @@ static struct page *get_arg_page(struct linux_binprm *bprm, unsigned long pos,
 
 static void put_arg_page(struct page *page)
 {
-	put_user_page(page);
+	put_page(page);
 }
 
 static void free_arg_pages(struct linux_binprm *bprm)
@@ -1027,8 +1027,10 @@ static int exec_mmap(struct mm_struct *mm)
 	if (IS_ENABLED(CONFIG_ARCH_WANT_IRQS_OFF_ACTIVATE_MM))
 		local_irq_enable();
 	tsk->mm->vmacache_seqnum = 0;
+	lru_gen_add_mm(mm);
 	vmacache_flush(tsk);
 	task_unlock(tsk);
+	lru_gen_use_mm(mm);
 	if (old_mm) {
 		mmap_read_unlock(old_mm);
 		BUG_ON(active_mm != old_mm);

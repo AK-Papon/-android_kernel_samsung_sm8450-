@@ -38,6 +38,14 @@ struct uac_fu_params {
 	s16 volume_res;		/* volume resolution in 1/256 dB */
 };
 
+/*
+ * Same maximum frequency deviation on the slower side as in
+ * sound/usb/endpoint.c. Value is expressed in per-mil deviation.
+ * The maximum deviation on the faster side will be provided as
+ * parameter, as it impacts the endpoint required bandwidth.
+ */
+#define FBACK_SLOW_MAX	250
+
 struct uac_params {
 	/* playback */
 	int p_chmask;	/* channel mask */

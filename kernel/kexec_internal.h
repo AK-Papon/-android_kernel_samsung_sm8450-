@@ -13,8 +13,6 @@ void kimage_terminate(struct kimage *image);
 int kimage_is_destination_range(struct kimage *image,
 				unsigned long start, unsigned long end);
 
-int machine_kexec_post_load(struct kimage *image);
-
 /*
  * Whatever is used to serialize accesses to the kexec_crash_image needs to be
  * NMI safe, as __crash_kexec() can happen during nmi_panic(), so here we use a

@@ -37,6 +37,8 @@
 #include <asm/tlbflush.h>
 #include <asm/pgalloc.h>
 
+#include <trace/hooks/mm.h>
+
 #define NO_BLOCK_MAPPINGS	BIT(0)
 #define NO_CONT_MAPPINGS	BIT(1)
 
@@ -95,7 +97,8 @@ static phys_addr_t __init early_pgtable_alloc(int shift)
 	phys_addr_t phys;
 	void *ptr;
 
-	phys = memblock_phys_alloc(PAGE_SIZE, PAGE_SIZE);
+	phys = memblock_phys_alloc_range(PAGE_SIZE, PAGE_SIZE, 0,
+					 MEMBLOCK_ALLOC_NOLEAKTRACE);
 	if (!phys)
 		panic("Failed to allocate page table page\n");
 
@@ -310,7 +313,7 @@ static void alloc_init_pud(pgd_t *pgdp, unsigned long addr, unsigned long end,
 		phys_addr_t pud_phys;
 		BUG_ON(!pgtable_alloc);
 		pud_phys = pgtable_alloc(PUD_SHIFT);
-		__p4d_populate(p4dp, pud_phys, PUD_TYPE_TABLE);
+		__p4d_populate(p4dp, pud_phys, P4D_TYPE_TABLE);
 		p4d = READ_ONCE(*p4dp);
 	}
 	BUG_ON(p4d_bad(p4d));
@@ -1254,11 +1257,11 @@ void __init early_fixmap_init(void)
 		pudp = pud_offset_kimg(p4dp, addr);
 	} else {
 		if (p4d_none(p4d))
-			__p4d_populate(p4dp, __pa_symbol(bm_pud), PUD_TYPE_TABLE);
+			__p4d_populate(p4dp, __pa_symbol(bm_pud), P4D_TYPE_TABLE);
 		pudp = fixmap_pud(addr);
 	}
 	if (pud_none(READ_ONCE(*pudp)))
-		__pud_populate(pudp, __pa_symbol(bm_pmd), PMD_TYPE_TABLE);
+		__pud_populate(pudp, __pa_symbol(bm_pmd), PUD_TYPE_TABLE);
 	pmdp = fixmap_pmd(addr);
 	__pmd_populate(pmdp, __pa_symbol(bm_pte), PMD_TYPE_TABLE);
 
@@ -1305,6 +1308,21 @@ void __set_fixmap(enum fixed_addresses idx,
 		pte_clear(&init_mm, addr, ptep);
 		flush_tlb_kernel_range(addr, addr+PAGE_SIZE);
 	}
+}
+
+pte_t *__get_fixmap_pte(enum fixed_addresses idx)
+{
+	unsigned long addr = __fix_to_virt(idx);
+	pte_t *ptep;
+
+	BUG_ON(idx <= FIX_HOLE || idx >= __end_of_fixed_addresses);
+
+	ptep = fixmap_pte(addr);
+
+	if (!pte_valid(*ptep))
+		return NULL;
+
+	return ptep;
 }
 
 void *__init fixmap_remap_fdt(phys_addr_t dt_phys, int *size, pgprot_t prot)
@@ -1475,6 +1493,14 @@ int pud_free_pmd_page(pud_t *pudp, unsigned long addr)
 int p4d_free_pud_page(p4d_t *p4d, unsigned long addr)
 {
 	return 0;	/* Don't attempt a block mapping */
+}
+
+bool should_flush_tlb_when_young(void)
+{
+	bool skip = false;
+
+	trace_android_vh_ptep_clear_flush_young(&skip);
+	return !skip;
 }
 
 #ifdef CONFIG_MEMORY_HOTPLUG

@@ -5,21 +5,14 @@
 #define TRACE_INCLUDE_PATH trace/hooks
 #if !defined(_TRACE_HOOK_CREDS_H) || defined(TRACE_HEADER_MULTI_READ)
 #define _TRACE_HOOK_CREDS_H
-#include <linux/tracepoint.h>
 #include <trace/hooks/vendor_hooks.h>
 /*
  * Following tracepoints are not exported in tracefs and provide a
  * mechanism for vendor modules to hook and extend functionality
  */
-#ifdef __GENKSYMS__
 struct cred;
 struct task_struct;
-#else
-/* struct cred */
-#include <linux/cred.h>
-/* struct task_struct */
-#include <linux/sched.h>
-#endif /* __GENKSYMS__ */
+
 DECLARE_HOOK(android_vh_commit_creds,
 	TP_PROTO(const struct task_struct *task, const struct cred *new),
 	TP_ARGS(task, new));

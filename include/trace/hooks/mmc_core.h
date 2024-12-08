@@ -7,25 +7,11 @@
 #if !defined(_TRACE_HOOK_MMC_CORE_H) || defined(TRACE_HEADER_MULTI_READ)
 #define _TRACE_HOOK_MMC_CORE_H
 
-#include <linux/tracepoint.h>
 #include <trace/hooks/vendor_hooks.h>
 
-#if defined(__GENKSYMS__) || !IS_ENABLED(CONFIG_MMC_SDHCI)
 struct sdhci_host;
-#else
-/* struct sdhci_host */
-#include <../drivers/mmc/host/sdhci.h>
-#endif
-
-#ifdef __GENKSYMS__
 struct mmc_card;
 struct mmc_host;
-#else
-/* struct mmc_card */
-#include <linux/mmc/card.h>
-/* struct mmc_host */
-#include <linux/mmc/host.h>
-#endif /* __GENKSYMS__ */
 
 DECLARE_HOOK(android_vh_mmc_blk_reset,
 	     TP_PROTO(struct mmc_host *host, int err, bool *allow),

@@ -17,13 +17,6 @@ struct mmu_notifier;
 struct mmu_notifier_range;
 struct mmu_interval_notifier;
 
-struct mmu_notifier_subscriptions_hdr {
-	bool valid;
-#ifdef CONFIG_SPECULATIVE_PAGE_FAULT
-	struct percpu_rw_semaphore_atomic *mmu_notifier_lock;
-#endif
-};
-
 /**
  * enum mmu_notifier_event - reason for the mmu notifier callback
  * @MMU_NOTIFY_UNMAP: either munmap() that unmap the range or a mremap() that
@@ -290,30 +283,9 @@ struct mmu_notifier_range {
 	void *migrate_pgmap_owner;
 };
 
-static inline
-struct mmu_notifier_subscriptions_hdr *get_notifier_subscriptions_hdr(
-							struct mm_struct *mm)
-{
-	/*
-	 * container_of() can't be used here because mmu_notifier_subscriptions
-	 * struct should be kept invisible to mm_struct, otherwise it
-	 * introduces KMI CRC breakage. Therefore the callers don't know what
-	 * members struct mmu_notifier_subscriptions contains and can't call
-	 * container_of(), which requires a member name.
-	 *
-	 * WARNING: For this typecasting to work, mmu_notifier_subscriptions_hdr
-	 * should be the first member of struct mmu_notifier_subscriptions.
-	 */
-	return (struct mmu_notifier_subscriptions_hdr *)mm->notifier_subscriptions;
-}
-
 static inline int mm_has_notifiers(struct mm_struct *mm)
 {
-#ifdef CONFIG_SPECULATIVE_PAGE_FAULT
-	return unlikely(get_notifier_subscriptions_hdr(mm)->valid);
-#else
 	return unlikely(mm->notifier_subscriptions);
-#endif
 }
 
 struct mmu_notifier *mmu_notifier_get_locked(const struct mmu_notifier_ops *ops,
@@ -534,19 +506,40 @@ static inline void mmu_notifier_invalidate_range(struct mm_struct *mm,
 
 #ifdef CONFIG_SPECULATIVE_PAGE_FAULT
 
-extern bool mmu_notifier_subscriptions_init(struct mm_struct *mm);
-extern void mmu_notifier_subscriptions_destroy(struct mm_struct *mm);
+static inline bool mmu_notifier_subscriptions_init(struct mm_struct *mm)
+{
+	mm->mmu_notifier_lock = kzalloc(sizeof(struct percpu_rw_semaphore), GFP_KERNEL);
+	if (!mm->mmu_notifier_lock)
+		return false;
+
+	percpu_init_rwsem(mm->mmu_notifier_lock);
+	mm->notifier_subscriptions = NULL;
+
+	return true;
+}
+
+static inline void mmu_notifier_subscriptions_destroy(struct mm_struct *mm)
+{
+	if (mm_has_notifiers(mm))
+		__mmu_notifier_subscriptions_destroy(mm);
+
+	if (in_atomic()) {
+		percpu_rwsem_async_destroy(mm->mmu_notifier_lock);
+	} else {
+		percpu_free_rwsem(mm->mmu_notifier_lock);
+		kfree(mm->mmu_notifier_lock);
+	}
+	mm->mmu_notifier_lock = NULL;
+}
 
 static inline bool mmu_notifier_trylock(struct mm_struct *mm)
 {
-	return percpu_down_read_trylock(
-		&get_notifier_subscriptions_hdr(mm)->mmu_notifier_lock->rw_sem);
+	return percpu_down_read_trylock(mm->mmu_notifier_lock);
 }
 
 static inline void mmu_notifier_unlock(struct mm_struct *mm)
 {
-	percpu_up_read(
-		&get_notifier_subscriptions_hdr(mm)->mmu_notifier_lock->rw_sem);
+	percpu_up_read(mm->mmu_notifier_lock);
 }
 
 #else /* CONFIG_SPECULATIVE_PAGE_FAULT */

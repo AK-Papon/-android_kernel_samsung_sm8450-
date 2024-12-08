@@ -548,7 +548,7 @@ unsigned int cpufreq_driver_resolve_freq(struct cpufreq_policy *policy,
 	unsigned int old_target_freq = target_freq;
 
 	target_freq = clamp_val(target_freq, policy->min, policy->max);
-	trace_android_vh_cpufreq_resolve_freq(policy, target_freq, old_target_freq);
+	trace_android_vh_cpufreq_resolve_freq(policy, &target_freq, old_target_freq);
 	policy->cached_target_freq = target_freq;
 
 	if (cpufreq_driver->target_index) {
@@ -702,7 +702,6 @@ static ssize_t show_cpuinfo_max_freq(struct cpufreq_policy *policy, char *buf)
 	unsigned int max_freq = policy->cpuinfo.max_freq;
 
 	trace_android_vh_show_max_freq(policy, &max_freq);
-	trace_android_rvh_show_max_freq(policy, &max_freq);
 	return sprintf(buf, "%u\n", max_freq);
 }
 
@@ -1575,35 +1574,46 @@ static int cpufreq_add_dev(struct device *dev, struct subsys_interface *sif)
 	return 0;
 }
 
-static void __cpufreq_offline(unsigned int cpu, struct cpufreq_policy *policy)
+static int cpufreq_offline(unsigned int cpu)
 {
+	struct cpufreq_policy *policy;
 	int ret;
 
+	pr_debug("%s: unregistering CPU %u\n", __func__, cpu);
+
+	policy = cpufreq_cpu_get_raw(cpu);
+	if (!policy) {
+		pr_debug("%s: No cpu_data found\n", __func__);
+		return 0;
+	}
+
+	down_write(&policy->rwsem);
 	if (has_target())
 		cpufreq_stop_governor(policy);
 
 	cpumask_clear_cpu(cpu, policy->cpus);
 
-	if (!policy_is_inactive(policy)) {
-		/* Nominate a new CPU if necessary. */
-		if (cpu == policy->cpu)
-			policy->cpu = cpumask_any(policy->cpus);
+	if (policy_is_inactive(policy)) {
+		if (has_target())
+			strncpy(policy->last_governor, policy->governor->name,
+				CPUFREQ_NAME_LEN);
+		else
+			policy->last_policy = policy->policy;
+	} else if (cpu == policy->cpu) {
+		/* Nominate new CPU */
+		policy->cpu = cpumask_any(policy->cpus);
+	}
 
-		/* Start the governor again for the active policy. */
+	/* Start governor again for active policy */
+	if (!policy_is_inactive(policy)) {
 		if (has_target()) {
 			ret = cpufreq_start_governor(policy);
 			if (ret)
 				pr_err("%s: Failed to start governor\n", __func__);
 		}
 
-		return;
+		goto unlock;
 	}
-
-	if (has_target())
-		strncpy(policy->last_governor, policy->governor->name,
-			CPUFREQ_NAME_LEN);
-	else
-		policy->last_policy = policy->policy;
 
 	if (cpufreq_thermal_control_enabled(cpufreq_driver)) {
 		cpufreq_cooling_unregister(policy->cdev);
@@ -1622,31 +1632,12 @@ static void __cpufreq_offline(unsigned int cpu, struct cpufreq_policy *policy)
 	 */
 	if (cpufreq_driver->offline) {
 		cpufreq_driver->offline(policy);
-		return;
-	}
-
-	if (cpufreq_driver->exit)
+	} else if (cpufreq_driver->exit) {
 		cpufreq_driver->exit(policy);
-
-	policy->freq_table = NULL;
-}
-
-static int cpufreq_offline(unsigned int cpu)
-{
-	struct cpufreq_policy *policy;
-
-	pr_debug("%s: unregistering CPU %u\n", __func__, cpu);
-
-	policy = cpufreq_cpu_get_raw(cpu);
-	if (!policy) {
-		pr_debug("%s: No cpu_data found\n", __func__);
-		return 0;
+		policy->freq_table = NULL;
 	}
 
-	down_write(&policy->rwsem);
-
-	__cpufreq_offline(cpu, policy);
-
+unlock:
 	up_write(&policy->rwsem);
 	return 0;
 }
@@ -1664,26 +1655,19 @@ static void cpufreq_remove_dev(struct device *dev, struct subsys_interface *sif)
 	if (!policy)
 		return;
 
-	down_write(&policy->rwsem);
-
 	if (cpu_online(cpu))
-		__cpufreq_offline(cpu, policy);
+		cpufreq_offline(cpu);
 
 	cpumask_clear_cpu(cpu, policy->real_cpus);
 	remove_cpu_dev_symlink(policy, dev);
 
-	if (!cpumask_empty(policy->real_cpus)) {
-		up_write(&policy->rwsem);
-		return;
+	if (cpumask_empty(policy->real_cpus)) {
+		/* We did light-weight exit earlier, do full tear down now */
+		if (cpufreq_driver->offline)
+			cpufreq_driver->exit(policy);
+
+		cpufreq_policy_free(policy);
 	}
-
-	/* We did light-weight exit earlier, do full tear down now */
-	if (cpufreq_driver->offline && cpufreq_driver->exit)
-		cpufreq_driver->exit(policy);
-
-	up_write(&policy->rwsem);
-
-	cpufreq_policy_free(policy);
 }
 
 /**
@@ -2117,7 +2101,7 @@ unsigned int cpufreq_driver_fast_switch(struct cpufreq_policy *policy,
 	int cpu;
 
 	target_freq = clamp_val(target_freq, policy->min, policy->max);
-	trace_android_vh_cpufreq_fast_switch(policy, target_freq, old_target_freq);
+	trace_android_vh_cpufreq_fast_switch(policy, &target_freq, old_target_freq);
 	freq = cpufreq_driver->fast_switch(policy, target_freq);
 
 	if (!freq)
@@ -2127,7 +2111,6 @@ unsigned int cpufreq_driver_fast_switch(struct cpufreq_policy *policy,
 	arch_set_freq_scale(policy->related_cpus, freq,
 			    policy->cpuinfo.max_freq);
 	cpufreq_stats_record_transition(policy, freq);
-	cpufreq_times_record_transition(policy, freq);
 	trace_android_rvh_cpufreq_transition(policy);
 
 	if (trace_cpu_frequency_enabled()) {
@@ -2234,7 +2217,7 @@ int __cpufreq_driver_target(struct cpufreq_policy *policy,
 
 	/* Make sure that target_freq is within supported range */
 	target_freq = clamp_val(target_freq, policy->min, policy->max);
-	trace_android_vh_cpufreq_target(policy, target_freq, old_target_freq);
+	trace_android_vh_cpufreq_target(policy, &target_freq, old_target_freq);
 
 	pr_debug("target for CPU %u: %u kHz, relation %u, requested %u kHz\n",
 		 policy->cpu, target_freq, relation, old_target_freq);

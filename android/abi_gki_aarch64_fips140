@@ -92,7 +92,6 @@
   kfree_sensitive
   __kmalloc
   kmalloc_caches
-  kmalloc_order_trace
   kmem_cache_alloc_trace
   kmemdup
   ktime_get
@@ -128,7 +127,6 @@
   skcipher_walk_virt
   snprintf
   __stack_chk_fail
-  __stack_chk_guard
   strcmp
   strlcat
   strlcpy
@@ -148,32 +146,3 @@
   wait_for_completion
   xa_load
   xa_store
-
-# preserved by --additions-only
-  aes_decrypt
-  aes_encrypt
-  aes_expandkey
-  arm64_const_caps_ready
-  ce_aes_expandkey
-  cpu_hwcap_keys
-  crypto_aes_inv_sbox
-  crypto_aes_sbox
-  crypto_aes_set_key
-  crypto_alg_mod_lookup
-  crypto_cipher_decrypt_one
-  crypto_ft_tab
-  crypto_inc
-  crypto_it_tab
-  __crypto_memneq
-  crypto_remove_final
-  crypto_sha1_finup
-  crypto_sha1_update
-  __crypto_xor
-  gf128mul_lle
-  sha1_transform
-  sha224_final
-  sha256
-  sha256_block_data_order
-  sha256_final
-  sha256_update
-  synchronize_rcu_tasks

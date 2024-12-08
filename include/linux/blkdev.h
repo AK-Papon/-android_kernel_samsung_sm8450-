@@ -59,7 +59,7 @@ struct blk_keyslot_manager;
  * Maximum number of blkcg policies allowed to be registered concurrently.
  * Defined here to simplify include dependency.
  */
-#define BLKCG_MAX_POLS		5
+#define BLKCG_MAX_POLS		6
 
 static inline int blk_validate_block_size(unsigned long bsize)
 {
@@ -711,6 +711,18 @@ static inline bool queue_is_mq(struct request_queue *q)
 {
 	return q->mq_ops;
 }
+
+#ifdef CONFIG_PM
+static inline enum rpm_status queue_rpm_status(struct request_queue *q)
+{
+	return q->rpm_status;
+}
+#else
+static inline enum rpm_status queue_rpm_status(struct request_queue *q)
+{
+	return RPM_ACTIVE;
+}
+#endif
 
 static inline enum blk_zoned_model
 blk_queue_zoned_model(struct request_queue *q)

@@ -59,8 +59,9 @@ struct scsi_pointer {
 #define SCMD_UNCHECKED_ISA_DMA	(1 << 1)
 #define SCMD_INITIALIZED	(1 << 2)
 #define SCMD_LAST		(1 << 3)
+#define SCMD_FAIL_IF_RECOVERING	(1 << 4)
 /* flags preserved across unprep / reprep */
-#define SCMD_PRESERVED_FLAGS	(SCMD_UNCHECKED_ISA_DMA | SCMD_INITIALIZED)
+#define SCMD_PRESERVED_FLAGS	(SCMD_UNCHECKED_ISA_DMA | SCMD_INITIALIZED | SCMD_FAIL_IF_RECOVERING)
 
 /* for scmd->state */
 #define SCMD_STATE_COMPLETE	0
@@ -169,6 +170,12 @@ static inline void *scsi_cmd_priv(struct scsi_cmnd *cmd)
 static inline struct scsi_driver *scsi_cmd_to_driver(struct scsi_cmnd *cmd)
 {
 	return *(struct scsi_driver **)cmd->request->rq_disk->private_data;
+}
+
+/* A helper function to make it easier to backport upstream SCSI patches. */
+static inline void scsi_done(struct scsi_cmnd *cmd)
+{
+	cmd->scsi_done(cmd);
 }
 
 extern void scsi_finish_command(struct scsi_cmnd *cmd);

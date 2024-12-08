@@ -5,7 +5,6 @@
 
 #if !defined(_TRACE_HOOK_FIPS140_H) || defined(TRACE_HEADER_MULTI_READ)
 #define _TRACE_HOOK_FIPS140_H
-#include <linux/tracepoint.h>
 #include <trace/hooks/vendor_hooks.h>
 
 #ifdef __GENKSYMS__

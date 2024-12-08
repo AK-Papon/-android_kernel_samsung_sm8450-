@@ -1379,10 +1379,8 @@ static int add_call_destinations(struct objtool_file *file)
 			}
 
 			add_call_dest(file, insn, dest, false);
-
 		} else if (reloc->sym->retpoline_thunk) {
 			add_retpoline_call(file, insn);
-
 		} else
 			add_call_dest(file, insn, reloc->sym, false);
 	}
@@ -3663,7 +3661,7 @@ int check(struct objtool_file *file)
 			goto out;
 		warnings += ret;
 	}
-
+	
 	if (retpoline) {
 		ret = create_retpoline_sites_sections(file);
 		if (ret < 0)

@@ -42,6 +42,7 @@
 #define FLAGS_WORKAROUND_GICR_WAKER_MSM8996	(1ULL << 0)
 #define FLAGS_WORKAROUND_CAVIUM_ERRATUM_38539	(1ULL << 1)
 #define FLAGS_WORKAROUND_MTK_GICR_SAVE		(1ULL << 2)
+#define FLAGS_WORKAROUND_ASR_ERRATUM_8601001	(1ULL << 3)
 
 #define GIC_IRQ_TYPE_PARTITION	(GIC_IRQ_TYPE_LPI + 1)
 
@@ -50,8 +51,6 @@ struct redist_region {
 	phys_addr_t		phys_base;
 	bool			single_redist;
 };
-
-static DEFINE_STATIC_KEY_FALSE(gic_arm64_2941627_erratum);
 
 static struct gic_chip_data gic_data __read_mostly;
 static DEFINE_STATIC_KEY_TRUE(supports_deactivate_key);
@@ -119,7 +118,7 @@ EXPORT_SYMBOL(gic_nonsecure_priorities);
 /* ppi_nmi_refs[n] == number of cpus having ppi[n + 16] set as NMI */
 static refcount_t *ppi_nmi_refs;
 
-static struct gic_kvm_info gic_v3_kvm_info;
+static struct gic_kvm_info gic_v3_kvm_info __initdata;
 static DEFINE_PER_CPU(bool, has_rss);
 
 #define MPIDR_RS(mpidr)			(((mpidr) & 0xF0UL) >> 4)
@@ -217,11 +216,10 @@ static void gic_do_wait_for_rwp(void __iomem *base, u32 bit)
 }
 
 /* Wait for completion of a distributor change */
-void gic_dist_wait_for_rwp(void)
+static void gic_dist_wait_for_rwp(void)
 {
 	gic_do_wait_for_rwp(gic_data.dist_base, GICD_CTLR_RWP);
 }
-EXPORT_SYMBOL_GPL(gic_dist_wait_for_rwp);
 
 /* Wait for completion of a redistributor change */
 static void gic_redist_wait_for_rwp(void)
@@ -424,13 +422,6 @@ static int gic_irq_set_irqchip_state(struct irq_data *d,
 	}
 
 	gic_poke_irq(d, reg);
-
-	/*
-	 * Force read-back to guarantee that the active state has taken
-	 * effect, and won't race with a guest-driven deactivation.
-	 */
-	if (reg == GICD_ISACTIVER)
-		gic_peek_irq(d, reg);
 	return 0;
 }
 
@@ -552,39 +543,9 @@ static void gic_irq_nmi_teardown(struct irq_data *d)
 	gic_irq_set_prio(d, GICD_INT_DEF_PRI);
 }
 
-static bool gic_arm64_erratum_2941627_needed(struct irq_data *d)
-{
-	enum gic_intid_range range;
-
-	if (!static_branch_unlikely(&gic_arm64_2941627_erratum))
-		return false;
-
-	range = get_intid_range(d);
-
-	/*
-	 * The workaround is needed if the IRQ is an SPI and
-	 * the target cpu is different from the one we are
-	 * executing on.
-	 */
-	return (range == SPI_RANGE || range == ESPI_RANGE) &&
-		!cpumask_test_cpu(raw_smp_processor_id(),
-				  irq_data_get_effective_affinity_mask(d));
-}
-
 static void gic_eoi_irq(struct irq_data *d)
 {
-	write_gicreg(gic_irq(d), ICC_EOIR1_EL1);
-	isb();
-
-	if (gic_arm64_erratum_2941627_needed(d)) {
-		/*
-		 * Make sure the GIC stream deactivate packet
-		 * issued by ICC_EOIR1_EL1 has completed before
-		 * deactivating through GICD_IACTIVER.
-		 */
-		dsb(sy);
-		gic_poke_irq(d, GICD_ICACTIVER);
-	}
+	gic_write_eoir(gic_irq(d));
 }
 
 static void gic_eoimode1_eoi_irq(struct irq_data *d)
@@ -595,11 +556,7 @@ static void gic_eoimode1_eoi_irq(struct irq_data *d)
 	 */
 	if (gic_irq(d) >= 8192 || irqd_is_forwarded_to_vcpu(d))
 		return;
-
-	if (!gic_arm64_erratum_2941627_needed(d))
-		gic_write_dir(gic_irq(d));
-	else
-		gic_poke_irq(d, GICD_ICACTIVER);
+	gic_write_dir(gic_irq(d));
 }
 
 static int gic_set_type(struct irq_data *d, unsigned int type)
@@ -654,9 +611,15 @@ static int gic_irq_set_vcpu_affinity(struct irq_data *d, void *vcpu)
 	return 0;
 }
 
-static u64 gic_mpidr_to_affinity(unsigned long mpidr)
+static u64 gic_cpu_to_affinity(int cpu)
 {
+	u64 mpidr = cpu_logical_map(cpu);
 	u64 aff;
+
+	/* ASR8601 needs to have its affinities shifted down... */
+	if (unlikely(gic_data.flags & FLAGS_WORKAROUND_ASR_ERRATUM_8601001))
+		mpidr = (MPIDR_AFFINITY_LEVEL(mpidr, 1)	|
+			 (MPIDR_AFFINITY_LEVEL(mpidr, 2) << 8));
 
 	aff = ((u64)MPIDR_AFFINITY_LEVEL(mpidr, 3) << 32 |
 	       MPIDR_AFFINITY_LEVEL(mpidr, 2) << 16 |
@@ -805,7 +768,7 @@ static bool gic_has_group0(void)
 	return val != 0;
 }
 
-void gic_dist_init(void)
+static void __init gic_dist_init(void)
 {
 	unsigned int i;
 	u64 affinity;
@@ -856,14 +819,17 @@ void gic_dist_init(void)
 	 * Set all global interrupts to the boot CPU only. ARE must be
 	 * enabled.
 	 */
-	affinity = gic_mpidr_to_affinity(cpu_logical_map(smp_processor_id()));
-	for (i = 32; i < GIC_LINE_NR; i++)
+	affinity = gic_cpu_to_affinity(smp_processor_id());
+	for (i = 32; i < GIC_LINE_NR; i++) {
+		trace_android_vh_gic_v3_affinity_init(i, GICD_IROUTER, &affinity);
 		gic_write_irouter(affinity, base + GICD_IROUTER + i * 8);
+	}
 
-	for (i = 0; i < GIC_ESPI_NR; i++)
+	for (i = 0; i < GIC_ESPI_NR; i++) {
+		trace_android_vh_gic_v3_affinity_init(i, GICD_IROUTERnE, &affinity);
 		gic_write_irouter(affinity, base + GICD_IROUTERnE + i * 8);
+	}
 }
-EXPORT_SYMBOL_GPL(gic_dist_init);
 
 static int gic_iterate_rdists(int (*fn)(struct redist_region *, void __iomem *))
 {
@@ -906,7 +872,7 @@ static int gic_iterate_rdists(int (*fn)(struct redist_region *, void __iomem *))
 
 static int __gic_populate_rdist(struct redist_region *region, void __iomem *ptr)
 {
-	unsigned long mpidr = cpu_logical_map(smp_processor_id());
+	unsigned long mpidr;
 	u64 typer;
 	u32 aff;
 
@@ -914,6 +880,8 @@ static int __gic_populate_rdist(struct redist_region *region, void __iomem *ptr)
 	 * Convert affinity to a 32bit value that can be matched to
 	 * GICR_TYPER bits [63:32].
 	 */
+	mpidr = gic_cpu_to_affinity(smp_processor_id());
+
 	aff = (MPIDR_AFFINITY_LEVEL(mpidr, 3) << 24 |
 	       MPIDR_AFFINITY_LEVEL(mpidr, 2) << 16 |
 	       MPIDR_AFFINITY_LEVEL(mpidr, 1) << 8 |
@@ -1013,7 +981,7 @@ static inline bool gic_dist_security_disabled(void)
 static void gic_cpu_sys_reg_init(void)
 {
 	int i, cpu = smp_processor_id();
-	u64 mpidr = cpu_logical_map(cpu);
+	u64 mpidr = gic_cpu_to_affinity(cpu);
 	u64 need_rss = MPIDR_RS(mpidr);
 	bool group0;
 	u32 pribits;
@@ -1112,11 +1080,11 @@ static void gic_cpu_sys_reg_init(void)
 	for_each_online_cpu(i) {
 		bool have_rss = per_cpu(has_rss, i) && per_cpu(has_rss, cpu);
 
-		need_rss |= MPIDR_RS(cpu_logical_map(i));
+		need_rss |= MPIDR_RS(gic_cpu_to_affinity(i));
 		if (need_rss && (!have_rss))
 			pr_crit("CPU%d (%lx) can't SGI CPU%d (%lx), no RSS\n",
 				cpu, (unsigned long)mpidr,
-				i, (unsigned long)cpu_logical_map(i));
+				i, (unsigned long)gic_cpu_to_affinity(i));
 	}
 
 	/**
@@ -1145,7 +1113,7 @@ static int gic_dist_supports_lpis(void)
 		!gicv3_nolpi);
 }
 
-void gic_cpu_init(void)
+static void gic_cpu_init(void)
 {
 	void __iomem *rbase;
 	int i;
@@ -1172,7 +1140,6 @@ void gic_cpu_init(void)
 	/* initialise system registers */
 	gic_cpu_sys_reg_init();
 }
-EXPORT_SYMBOL_GPL(gic_cpu_init);
 
 #ifdef CONFIG_SMP
 
@@ -1193,8 +1160,10 @@ static u16 gic_compute_target_list(int *base_cpu, const struct cpumask *mask,
 				   unsigned long cluster_id)
 {
 	int next_cpu, cpu = *base_cpu;
-	unsigned long mpidr = cpu_logical_map(cpu);
+	unsigned long mpidr;
 	u16 tlist = 0;
+
+	mpidr = gic_cpu_to_affinity(cpu);
 
 	while (cpu < nr_cpu_ids) {
 		tlist |= 1 << (mpidr & 0xf);
@@ -1204,7 +1173,7 @@ static u16 gic_compute_target_list(int *base_cpu, const struct cpumask *mask,
 			goto out;
 		cpu = next_cpu;
 
-		mpidr = cpu_logical_map(cpu);
+		mpidr = gic_cpu_to_affinity(cpu);
 
 		if (cluster_id != MPIDR_TO_SGI_CLUSTER_ID(mpidr)) {
 			cpu--;
@@ -1249,7 +1218,7 @@ static void gic_ipi_send_mask(struct irq_data *d, const struct cpumask *mask)
 	wmb();
 
 	for_each_cpu(cpu, mask) {
-		u64 cluster_id = MPIDR_TO_SGI_CLUSTER_ID(cpu_logical_map(cpu));
+		u64 cluster_id = MPIDR_TO_SGI_CLUSTER_ID(gic_cpu_to_affinity(cpu));
 		u16 tlist;
 
 		tlist = gic_compute_target_list(&cpu, mask, cluster_id);
@@ -1309,7 +1278,7 @@ static int gic_set_affinity(struct irq_data *d, const struct cpumask *mask_val,
 
 	offset = convert_offset_index(d, GICD_IROUTER, &index);
 	reg = gic_dist_base(d) + offset + (index * 8);
-	val = gic_mpidr_to_affinity(cpu_logical_map(cpu));
+	val = gic_cpu_to_affinity(cpu);
 
 	trace_android_rvh_gic_v3_set_affinity(d, mask_val, &val, force, gic_dist_base(d));
 	gic_write_irouter(val, reg);
@@ -1373,17 +1342,8 @@ void gic_resume(void)
 }
 EXPORT_SYMBOL_GPL(gic_resume);
 
-static int gic_suspend(void)
-{
-	int ret = 0;
-
-	trace_android_vh_gic_suspend(&gic_data, &ret);
-	return ret;
-}
-
 static struct syscore_ops gic_syscore_ops = {
 	.resume = gic_resume,
-	.suspend = gic_suspend,
 };
 
 static void gic_syscore_init(void)
@@ -1394,7 +1354,6 @@ static void gic_syscore_init(void)
 #else
 static inline void gic_syscore_init(void) { }
 void gic_resume(void) { }
-static int gic_suspend(void) { return 0; }
 #endif
 
 
@@ -1698,9 +1657,12 @@ static bool gic_enable_quirk_hip06_07(void *data)
 	return false;
 }
 
-static bool gic_enable_quirk_arm64_2941627(void *data)
+static bool gic_enable_quirk_asr8601(void *data)
 {
-	static_branch_enable(&gic_arm64_2941627_erratum);
+	struct gic_chip_data *d = data;
+
+	d->flags |= FLAGS_WORKAROUND_ASR_ERRATUM_8601001;
+
 	return true;
 }
 
@@ -1714,6 +1676,11 @@ static const struct gic_quirk gic_quirks[] = {
 		.desc	= "GICv3: Mediatek Chromebook GICR save problem",
 		.property = "mediatek,broken-save-restore-fw",
 		.init	= gic_enable_quirk_mtk_gicr,
+	},
+	{
+		.desc	= "GICv3: ASR erratum 8601001",
+		.compatible = "asr,asr8601-gic-v3",
+		.init	= gic_enable_quirk_asr8601,
 	},
 	{
 		.desc	= "GICv3: HIP06 erratum 161010803",
@@ -1739,25 +1706,6 @@ static const struct gic_quirk gic_quirks[] = {
 		.iidr	= 0xa000034c,
 		.mask	= 0xe8f00fff,
 		.init	= gic_enable_quirk_cavium_38539,
-	},
-	{
-		/*
-		 * GIC-700: 2941627 workaround - IP variant [0,1]
-		 *
-		 */
-		.desc	= "GICv3: ARM64 erratum 2941627",
-		.iidr	= 0x0400043b,
-		.mask	= 0xff0e0fff,
-		.init	= gic_enable_quirk_arm64_2941627,
-	},
-	{
-		/*
-		 * GIC-700: 2941627 workaround - IP variant [2]
-		 */
-		.desc	= "GICv3: ARM64 erratum 2941627",
-		.iidr	= 0x0402043b,
-		.mask	= 0xff0f0fff,
-		.init	= gic_enable_quirk_arm64_2941627,
 	},
 	{
 	}
@@ -2056,7 +2004,7 @@ static void __init gic_of_setup_kvm_info(struct device_node *node)
 
 	gic_v3_kvm_info.has_v4 = gic_data.rdists.has_vlpis;
 	gic_v3_kvm_info.has_v4_1 = gic_data.rdists.has_rvpeid;
-	gic_set_kvm_info(&gic_v3_kvm_info);
+	vgic_set_kvm_info(&gic_v3_kvm_info);
 }
 
 static int __init gic_of_init(struct device_node *node, struct device_node *parent)
@@ -2372,7 +2320,7 @@ static void __init gic_acpi_setup_kvm_info(void)
 
 	gic_v3_kvm_info.has_v4 = gic_data.rdists.has_vlpis;
 	gic_v3_kvm_info.has_v4_1 = gic_data.rdists.has_rvpeid;
-	gic_set_kvm_info(&gic_v3_kvm_info);
+	vgic_set_kvm_info(&gic_v3_kvm_info);
 }
 
 static int __init

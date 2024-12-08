@@ -1023,7 +1023,7 @@ void ext4_show_inline_dir(struct inode *dir, struct buffer_head *bh,
 			     offset, de_len, de->name_len, de->name,
 			     de->name_len, le32_to_cpu(de->inode));
 		if (ext4_check_dir_entry(dir, NULL, de, bh,
-					 inline_start, inline_size, 0, offset))
+					 inline_start, inline_size, offset))
 			BUG();
 
 		offset += de_len;
@@ -1049,7 +1049,7 @@ static int ext4_add_dirent_to_inline(handle_t *handle,
 	int		err;
 	struct ext4_dir_entry_2 *de;
 
-	err = ext4_find_dest_de(dir, inode, 0, iloc->bh, inline_start,
+	err = ext4_find_dest_de(dir, inode, iloc->bh, inline_start,
 				inline_size, fname, &de);
 	if (err)
 		return err;
@@ -1436,7 +1436,7 @@ int ext4_inlinedir_to_tree(struct file *dir_file,
 			pos += ext4_rec_len_from_disk(de->rec_len, inline_size);
 			if (ext4_check_dir_entry(inode, dir_file, de,
 					 iloc.bh, dir_buf,
-					 inline_size, block, pos)) {
+					 inline_size, pos)) {
 				ret = count;
 				goto out;
 			}
@@ -1593,7 +1593,7 @@ int ext4_read_inline_dir(struct file *file,
 		de = (struct ext4_dir_entry_2 *)
 			(dir_buf + ctx->pos - extra_offset);
 		if (ext4_check_dir_entry(inode, file, de, iloc.bh, dir_buf,
-					 extra_size, 0, ctx->pos))
+					 extra_size, ctx->pos))
 			goto out;
 		if (le32_to_cpu(de->inode)) {
 			if (!dir_emit(ctx, de->name, de->name_len,
@@ -1667,37 +1667,25 @@ struct buffer_head *ext4_find_inline_entry(struct inode *dir,
 					struct ext4_dir_entry_2 **res_dir,
 					int *has_inline_data)
 {
-	struct ext4_xattr_ibody_find is = {
-		.s = { .not_found = -ENODATA, },
-	};
-	struct ext4_xattr_info i = {
-		.name_index = EXT4_XATTR_INDEX_SYSTEM,
-		.name = EXT4_XATTR_SYSTEM_DATA,
-	};
 	int ret;
+	struct ext4_iloc iloc;
 	void *inline_start;
 	int inline_size;
 
-	ret = ext4_get_inode_loc(dir, &is.iloc);
-	if (ret)
-		return ERR_PTR(ret);
+	if (ext4_get_inode_loc(dir, &iloc))
+		return NULL;
 
 	down_read(&EXT4_I(dir)->xattr_sem);
-
-	ret = ext4_xattr_ibody_find(dir, &i, &is);
-	if (ret)
-		goto out;
-
 	if (!ext4_has_inline_data(dir)) {
 		*has_inline_data = 0;
 		goto out;
 	}
 
-	inline_start = (void *)ext4_raw_inode(&is.iloc)->i_block +
+	inline_start = (void *)ext4_raw_inode(&iloc)->i_block +
 						EXT4_INLINE_DOTDOT_SIZE;
 	inline_size = EXT4_MIN_INLINE_DATA_SIZE - EXT4_INLINE_DOTDOT_SIZE;
-	ret = ext4_search_dir(is.iloc.bh, inline_start, inline_size,
-			      dir, fname, 0, 0, res_dir);
+	ret = ext4_search_dir(iloc.bh, inline_start, inline_size,
+			      dir, fname, 0, res_dir);
 	if (ret == 1)
 		goto out_find;
 	if (ret < 0)
@@ -1706,23 +1694,20 @@ struct buffer_head *ext4_find_inline_entry(struct inode *dir,
 	if (ext4_get_inline_size(dir) == EXT4_MIN_INLINE_DATA_SIZE)
 		goto out;
 
-	inline_start = ext4_get_inline_xattr_pos(dir, &is.iloc);
+	inline_start = ext4_get_inline_xattr_pos(dir, &iloc);
 	inline_size = ext4_get_inline_size(dir) - EXT4_MIN_INLINE_DATA_SIZE;
 
-	ret = ext4_search_dir(is.iloc.bh, inline_start, inline_size,
-			      dir, fname, 0, 0, res_dir);
+	ret = ext4_search_dir(iloc.bh, inline_start, inline_size,
+			      dir, fname, 0, res_dir);
 	if (ret == 1)
 		goto out_find;
 
 out:
-	brelse(is.iloc.bh);
-	if (ret < 0)
-		is.iloc.bh = ERR_PTR(ret);
-	else
-		is.iloc.bh = NULL;
+	brelse(iloc.bh);
+	iloc.bh = NULL;
 out_find:
 	up_read(&EXT4_I(dir)->xattr_sem);
-	return is.iloc.bh;
+	return iloc.bh;
 }
 
 int ext4_delete_inline_entry(handle_t *handle,
@@ -1762,7 +1747,7 @@ int ext4_delete_inline_entry(handle_t *handle,
 	if (err)
 		goto out;
 
-	err = ext4_generic_delete_entry(dir, de_del, 0, bh,
+	err = ext4_generic_delete_entry(dir, de_del, bh,
 					inline_start, inline_size, 0);
 	if (err)
 		goto out;
@@ -1847,7 +1832,7 @@ bool empty_inline_dir(struct inode *dir, int *has_inline_data)
 					   &inline_pos, &inline_size);
 		if (ext4_check_dir_entry(dir, NULL, de,
 					 iloc.bh, inline_pos,
-					 inline_size, 0, offset)) {
+					 inline_size, offset)) {
 			ext4_warning(dir->i_sb,
 				     "bad inline directory (dir #%lu) - "
 				     "inode %u, rec_len %u, name_len %d"

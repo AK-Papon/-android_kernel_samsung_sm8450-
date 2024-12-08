@@ -480,7 +480,8 @@ static int dw_pcie_rd_other_conf(struct pci_bus *bus, unsigned int devfn,
 
 	ret = pci_generic_config_read(bus, devfn, where, size, val);
 
-	if (!ret && (pci->iatu_unroll_enabled & DWC_IATU_IOCFG_SHARED))
+	if (!ret && ((pci->num_viewport <= 2) ||
+		     (pci->iatu_unroll_enabled & DWC_IATU_IOCFG_SHARED)))
 		dw_pcie_prog_outbound_atu(pci, 0, PCIE_ATU_TYPE_IO, pp->io_base,
 					  pp->io_bus_addr, pp->io_size);
 
@@ -496,7 +497,8 @@ static int dw_pcie_wr_other_conf(struct pci_bus *bus, unsigned int devfn,
 
 	ret = pci_generic_config_write(bus, devfn, where, size, val);
 
-	if (!ret && (pci->iatu_unroll_enabled & DWC_IATU_IOCFG_SHARED))
+	if (!ret && ((pci->num_viewport <= 2) ||
+		     (pci->iatu_unroll_enabled & DWC_IATU_IOCFG_SHARED)))
 		dw_pcie_prog_outbound_atu(pci, 0, PCIE_ATU_TYPE_IO, pp->io_base,
 					  pp->io_bus_addr, pp->io_size);
 
@@ -606,8 +608,6 @@ void dw_pcie_setup_rc(struct pcie_port *pp)
 				dw_pcie_prog_outbound_atu(pci, atu_idx,
 							  PCIE_ATU_TYPE_IO, pp->io_base,
 							  pp->io_bus_addr, pp->io_size);
-			else
-				pci->iatu_unroll_enabled |= DWC_IATU_IOCFG_SHARED;
 		}
 
 		if (pci->num_viewport <= atu_idx)

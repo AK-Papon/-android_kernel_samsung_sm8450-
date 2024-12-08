@@ -58,6 +58,7 @@ unsigned long cma_get_size(const struct cma *cma)
 {
 	return cma->count << PAGE_SHIFT;
 }
+EXPORT_SYMBOL_GPL(cma_get_size);
 
 const char *cma_get_name(const struct cma *cma)
 {
@@ -538,6 +539,7 @@ struct page *cma_alloc(struct cma *cma, size_t count, unsigned int align,
 		pr_debug("%s(): memory range at %p is busy, retrying\n",
 			 __func__, pfn_to_page(pfn));
 
+		trace_android_vh_cma_alloc_busy_info(&info);
 		trace_cma_alloc_busy_retry(cma->name, pfn, pfn_to_page(pfn),
 					   count, align);
 
@@ -578,7 +580,7 @@ out:
 	if (page) {
 		count_vm_event(CMA_ALLOC_SUCCESS);
 		cma_sysfs_account_success_pages(cma, count);
-	} else {
+	} else if (!(gfp_mask & __GFP_NORETRY)) {
 		count_vm_event(CMA_ALLOC_FAIL);
 		if (cma)
 			cma_sysfs_account_fail_pages(cma, count);
