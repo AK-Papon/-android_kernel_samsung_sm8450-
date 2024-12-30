@@ -257,7 +257,7 @@ struct aw20036 {
 	unsigned char stream_mode;
 	unsigned char sec_num;
 
-	atomic_t hw_init;
+	unsigned char dev_suspend;
 };
 
 typedef struct aw20036_cfg {
